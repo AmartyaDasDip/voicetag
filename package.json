@@ -1,7 +1,7 @@
 {
   "name": "voicetag",
   "productName": "VoiceTag",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Football match tagging with code window, hotkeys and offline voice commands",
   "main": "main.js",
   "author": "Dumitru Ciprian Lulciuc",

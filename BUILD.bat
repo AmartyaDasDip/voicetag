@@ -43,7 +43,7 @@ if errorlevel 1 (
 echo.
 echo  ==========================================================
 echo     DONE!  Your installer is in the "dist" folder:
-echo     VoiceTag-Setup-1.0.0.exe
+echo     VoiceTag-Setup-1.1.0.exe
 echo     Double-click it to install VoiceTag.
 echo  ==========================================================
 start "" "%~dp0dist"

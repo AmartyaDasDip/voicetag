@@ -55,7 +55,7 @@ jobs:
           tag_name: build-${{ github.run_number }}
           name: VoiceTag build ${{ github.run_number }}
           body: |
-            Download **VoiceTag-Setup-1.0.0.exe** below and double-click it to install.
+            Download **VoiceTag-Setup-1.1.0.exe** below and double-click it to install.
             If Windows says "Windows protected your PC": More info → Run anyway.
           files: dist/*.exe
           make_latest: true

@@ -149,6 +149,36 @@ ipcMain.handle('save-file', async (e, { defaultName, filters, data, encoding }) 
   await fs.promises.writeFile(r.filePath, buf);
   return r.filePath;
 });
+ipcMain.handle('open-text-files', async (e, { filters }) => {
+  const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], filters });
+  if (r.canceled) return [];
+  return Promise.all(r.filePaths.map(async p => ({ path: p, text: await fs.promises.readFile(p, 'utf8') })));
+});
+ipcMain.handle('read-text-files', async (e, paths) => {
+  // only VoiceTag project files can be read this way
+  return Promise.all((paths || []).filter(p => /\.(vtproj|json)$/i.test(p)).map(async p => {
+    try { return { path: p, text: await fs.promises.readFile(p, 'utf8') }; } catch (err) { return { path: p, error: String(err.message || err) }; }
+  }));
+});
+ipcMain.handle('open-external', async (e, url) => { if (/^https:\/\//.test(url)) shell.openExternal(url); });
+ipcMain.handle('app-version', async () => app.getVersion());
+ipcMain.handle('export-pdf', async (e, { html, defaultName }) => {
+  const r = await dialog.showSaveDialog(win, { title: 'Save match report', defaultPath: defaultName || 'match report.pdf', filters: [{ name: 'PDF', extensions: ['pdf'] }] });
+  if (r.canceled || !r.filePath) return null;
+  const tmp = path.join(app.getPath('temp'), 'voicetag-report-' + Date.now() + '.html');
+  await fs.promises.writeFile(tmp, html, 'utf8');
+  const w = new BrowserWindow({ show: false, width: 1100, height: 1500, webPreferences: { sandbox: true, javascript: false } });
+  try {
+    await w.loadFile(tmp);
+    const pdf = await w.webContents.printToPDF({ printBackground: true, pageSize: 'A4', margins: { marginType: 'custom', top: 0.4, bottom: 0.4, left: 0.4, right: 0.4 } });
+    await fs.promises.writeFile(r.filePath, pdf);
+    shell.openPath(r.filePath);
+    return r.filePath;
+  } finally {
+    w.destroy();
+    fs.promises.unlink(tmp).catch(() => {});
+  }
+});
 ipcMain.handle('open-text-file', async (e, { filters }) => {
   const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters });
   if (r.canceled || !r.filePaths[0]) return null;

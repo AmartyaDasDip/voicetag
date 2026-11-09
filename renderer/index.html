@@ -9,23 +9,41 @@
 <body>
 <div id="app">
   <header>
-    <div class="brand">🎙 Voice<span>Tag</span></div>
-    <button id="btnLoad" title="Open a match video">📂 Open video</button>
+    <div class="brand">🎙 Voice<span>Tag</span> <small id="appVer" class="muted"></small></div>
+    <button id="btnLoad" title="Open a match video (any format)">📂 Open video</button>
     <label>Period
       <select id="selPeriod">
         <option value="1">1st half</option><option value="2">2nd half</option>
         <option value="ET1">Extra time 1</option><option value="ET2">Extra time 2</option>
       </select>
     </label>
+    <button id="btnKickoff" title="Mark the kick-off of the selected period at the current video time">⏱ Kick-off</button>
+    <button id="btnEndPeriod" title="Mark the end of the selected period at the current video time">⏹ End period</button>
     <div class="sep"></div>
     <button id="btnMic">🎤 Voice: off <kbd>M</kbd></button>
+    <button id="btnLive" title="Live mode: tag a match without video using a running clock">🔴 Live</button>
     <div class="spacer"></div>
-    <button id="btnXlsx" title="Excel workbook">⬇ Excel</button>
-    <button id="btnCsv">⬇ CSV</button>
-    <button id="btnXml" title="Sportscode / Hudl style XML timeline">⬇ XML</button>
-    <div class="sep"></div>
-    <button id="btnSaveProj" title="Save tags + settings to a project file">💾 Save project</button>
-    <button id="btnOpenProj">📁 Open project</button>
+    <button id="btnMatch" title="Match info, squad, substitutions, sync">📋 Match</button>
+    <div class="menu">
+      <button class="menubtn">📁 File ▾</button>
+      <div class="menulist">
+        <button id="btnSaveProj">💾 Save project</button>
+        <button id="btnOpenProj">📂 Open project</button>
+        <hr>
+        <button id="btnImportXml">⬆ Import Sportscode / Nacsport XML</button>
+        <button id="btnImportPlayers">⬆ Import players (paste from Excel)</button>
+        <button id="btnTemplates">🧩 Code window templates</button>
+      </div>
+    </div>
+    <div class="menu">
+      <button class="menubtn">⬇ Export ▾</button>
+      <div class="menulist">
+        <button id="btnReport">📄 Match report (PDF)</button>
+        <button id="btnXlsx">📊 Excel</button>
+        <button id="btnCsv">CSV</button>
+        <button id="btnXml">XML timeline (Sportscode / Hudl)</button>
+      </div>
+    </div>
     <button id="btnSettings">⚙ Settings</button>
   </header>
 
@@ -33,20 +51,45 @@
     <section id="left">
       <div id="videoWrap">
         <video id="video" preload="auto"></video>
+        <canvas id="drawView" class="hidden"></canvas>
         <div id="drop">
           <div class="big">🎬</div>
           <div><b>Drop a match video here</b> or click <b>Open video</b></div>
           <div style="font-size:12px">Any format works: MP4, MOV, AVI, MKV, WMV, FLV, MPEG, MTS… (unusual formats are converted to MP4 once)</div>
+          <div style="font-size:12px">No video? Use <b>🔴 Live</b> to tag with a running clock and sync later.</div>
         </div>
+        <div id="liveClock" class="hidden"></div>
         <div id="toast"></div>
         <div id="plBanner" class="hidden"></div>
         <div id="convBox" class="hidden">
           <div class="ctitle">Converting video to MP4…</div>
-          <div class="small muted" id="convSub">This format can’t be played directly, so VoiceTag converts it once. Next time it opens instantly.</div>
+          <div class="small muted">This format can’t be played directly, so VoiceTag converts it once. Next time it opens instantly.</div>
           <div class="bar"><div id="convBar"></div></div>
           <div class="small" id="convText">Starting…</div>
           <button class="small" id="convCancel">Cancel</button>
         </div>
+        <div id="drawBar" class="hidden">
+          <span class="dlbl">Draw:</span>
+          <button data-tool="arrow" class="on" title="Arrow">➚</button>
+          <button data-tool="line" title="Line">╱</button>
+          <button data-tool="dashed" title="Dashed arrow (run)">⤏</button>
+          <button data-tool="circle" title="Spotlight / circle">◯</button>
+          <button data-tool="rect" title="Zone">▭</button>
+          <button data-tool="free" title="Freehand">✎</button>
+          <button data-tool="text" title="Text">T</button>
+          <span class="sep2"></span>
+          <button data-color="#ff3b3b" class="sw on" style="background:#ff3b3b"></button>
+          <button data-color="#ffd23b" class="sw" style="background:#ffd23b"></button>
+          <button data-color="#ffffff" class="sw" style="background:#ffffff"></button>
+          <button data-color="#3ea6ff" class="sw" style="background:#3ea6ff"></button>
+          <button data-color="#2ecc71" class="sw" style="background:#2ecc71"></button>
+          <span class="sep2"></span>
+          <button id="drawUndo" title="Undo">↶</button>
+          <button id="drawClear" title="Clear">🗑</button>
+          <button id="drawSave" class="primary" title="Attach this drawing to the selected tag">💾 Save to tag</button>
+          <button id="drawClose">✕</button>
+        </div>
+        <div id="textAsk" class="hidden"></div>
       </div>
 
       <div id="controls">
@@ -54,16 +97,19 @@
         <button id="btnPlay" title="Play / pause (Space)">▶ Play</button>
         <button id="btnFwd5" title="Forward 5 s (→)">5s ⏩</button>
         <span id="timeDisp">00:00 / 00:00</span>
+        <span id="matchDisp" class="matchclock" title="Match clock (mark kick-off to start it)">Match —</span>
         <label>Speed
           <select id="selSpeed">
             <option>0.25</option><option>0.5</option><option>0.75</option><option selected>1</option><option>1.25</option><option>1.5</option><option>2</option><option>3</option>
           </select>
         </label>
+        <button id="btnDraw" title="Draw on the video (telestration)">✏ Draw</button>
+        <label title="Timeline zoom">🔍 <input type="range" id="tlZoom" min="1" max="40" value="1" step="1"></label>
         <div class="spacer"></div>
-        <span class="muted small"><kbd>Space</kbd> play · <kbd>←</kbd><kbd>→</kbd> 5s · <kbd>Shift</kbd>+arrows 1s · <kbd>,</kbd><kbd>.</kbd> frame · <kbd>M</kbd> voice · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo</span>
+        <span class="muted small"><kbd>Space</kbd> play · <kbd>←</kbd><kbd>→</kbd> 5s · <kbd>,</kbd><kbd>.</kbd> frame · <kbd>M</kbd> voice · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo</span>
       </div>
 
-      <div id="timeline" title="Click to jump. One row per code."><div id="tlRows"></div><div id="tlHead"></div></div>
+      <div id="timeline"><div id="tlInner"><div id="tlRows"></div><div id="tlHead"></div></div></div>
 
       <div id="heardBar">
         <span class="lbl">Heard</span>
@@ -78,19 +124,26 @@
 
     <section id="right">
       <div class="tabs" id="rightTabs">
-        <button data-tab="code" class="active">Code window</button>
+        <button data-tab="code" class="active">Code</button>
         <button data-tab="events">Events <span id="evCount" class="muted"></span></button>
         <button data-tab="playlist">Playlist</button>
-        <button data-tab="summary">Summary</button>
+        <button data-tab="summary">Stats</button>
+        <button data-tab="maps">Maps</button>
+        <button data-tab="season">Season</button>
         <button data-tab="log">Voice log</button>
         <button data-tab="help">Help</button>
       </div>
 
       <div class="tabpane" id="tab-code">
         <div class="toolbar">
-          <span class="muted small">Click a button or press its key. Labels go to: <b id="targetInfo">—</b></span>
+          <span class="muted small">Labels go to: <b id="targetInfo">—</b></span>
           <div class="spacer"></div>
+          <button class="small" id="btnSub" title="Substitution">⇄ Sub</button>
           <button class="small" id="btnEditCW">✎ Edit buttons</button>
+        </div>
+        <div id="pitchInBox">
+          <div class="small muted" id="pitchHint">📍 Click the pitch to set the location of the selected tag (Shift+click = end point)</div>
+          <div id="pitchIn"></div>
         </div>
         <div id="codeWindow"></div>
       </div>
@@ -104,21 +157,20 @@
           <button class="small danger" id="btnClear">Clear all</button>
         </div>
         <table id="evTable">
-          <thead><tr><th style="width:60px">Time</th><th>Code</th><th>Player</th><th>Outcome</th><th>Other labels</th><th style="width:44px">Len</th><th style="width:28px"></th></tr></thead>
+          <thead><tr><th style="width:56px">Video</th><th style="width:62px">Match</th><th>Code</th><th>Player</th><th>Outcome</th><th style="width:70px"></th><th style="width:26px"></th></tr></thead>
           <tbody></tbody>
         </table>
         <div id="evEmpty" class="muted empty">No tags yet.</div>
       </div>
 
       <div class="tabpane hidden" id="tab-playlist">
-        <div class="plfilters">
-          <div id="plCodes" class="chips"></div>
-          <div class="toolbar">
-            <select id="plPlayer"><option value="">Any player</option></select>
-            <select id="plOutcome"><option value="">Any outcome</option></select>
-            <div class="spacer"></div>
-            <label class="small"><input type="checkbox" id="plAll" checked> select all</label>
-          </div>
+        <div id="plCodes" class="chips"></div>
+        <div class="toolbar">
+          <select id="plPlayer"><option value="">Any player</option></select>
+          <select id="plOutcome"><option value="">Any outcome</option></select>
+          <select id="plLabel"><option value="">Any label</option></select>
+          <div class="spacer"></div>
+          <label class="small"><input type="checkbox" id="plAll" checked> select all</label>
         </div>
         <div class="toolbar">
           <button id="plPlay" class="primary">▶ Play selected</button>
@@ -127,29 +179,54 @@
           <button id="plStop">⏹ Stop</button>
           <span class="muted small" id="plInfo"></span>
         </div>
-        <table id="plTable"><thead><tr><th style="width:24px"></th><th style="width:60px">Start</th><th>Clip</th><th style="width:48px">Len</th></tr></thead><tbody></tbody></table>
+        <table id="plTable"><thead><tr><th style="width:24px"></th><th style="width:56px">Start</th><th>Clip</th><th style="width:48px">Len</th></tr></thead><tbody></tbody></table>
         <div class="exportbox">
-          <div class="toolbar">
-            <b>Export video</b>
-            <select id="plQuality" title="Accurate = exact cut points (slower). Fast = no re-encoding, cuts snap to nearby keyframes.">
+          <div class="toolbar"><b>Export video</b>
+            <select id="plQuality">
               <option value="accurate">Accurate cuts</option>
-              <option value="fast">Fast (approx. cuts)</option>
+              <option value="fast">Fast (approx. cuts, no extras)</option>
             </select>
           </div>
+          <div class="toolbar small">
+            <label><input type="checkbox" id="plTitle" checked> Title card before each clip</label>
+            <label><input type="checkbox" id="plCaption" checked> Caption on clip</label>
+            <label><input type="checkbox" id="plDraw" checked> Freeze-frame drawings</label>
+          </div>
           <div class="toolbar">
-            <button id="plExportOne">🎞 One video (clips joined)</button>
-            <button id="plExportSep">📁 Separate clip files</button>
+            <button id="plExportOne">🎞 One video</button>
+            <button id="plExportSep">📁 Separate clips</button>
+            <button id="plExportPlayer">👤 One folder per player</button>
           </div>
           <div id="plProgress" class="hidden"><div class="bar"><div id="plBar"></div></div><span id="plProgText" class="small muted"></span> <button class="small" id="plCancel">Cancel</button></div>
         </div>
       </div>
 
       <div class="tabpane hidden" id="tab-summary">
-        <div class="toolbar"><span class="muted small">Player × code: total (success %)</span></div>
+        <div class="toolbar">
+          <select id="sumTeam"><option value="Home">Home</option><option value="Away">Opposition</option><option value="">Both teams</option></select>
+          <label class="small"><input type="checkbox" id="sumPer90"> per 90 min</label>
+          <div class="spacer"></div>
+          <span class="muted small">total (success %)</span>
+        </div>
         <div style="overflow:auto"><table id="sumTable" class="sum"></table></div>
-        <h4>Duration codes</h4>
-        <table id="durTable" class="sum"></table>
+        <h4>KPIs</h4><table id="kpiTable" class="sum"></table>
+        <h4>1st half vs 2nd half</h4><table id="halfTable" class="sum"></table>
+        <h4>Phases</h4><table id="durTable" class="sum"></table>
       </div>
+
+      <div class="tabpane hidden" id="tab-maps">
+        <div class="toolbar">
+          <select id="mapTeam"><option value="Home">Home</option><option value="Away">Opposition</option><option value="">Both</option></select>
+          <select id="mapPlayer"><option value="">All players</option></select>
+          <select id="mapCode"><option value="">All codes</option></select>
+          <select id="mapPeriod"><option value="">Whole match</option><option value="1">1st half</option><option value="2">2nd half</option></select>
+          <select id="mapMode"><option value="events">Events</option><option value="heat">Heatmap</option></select>
+        </div>
+        <div id="mapBox"></div>
+        <div class="small muted" id="mapInfo"></div>
+      </div>
+
+      <div class="tabpane hidden" id="tab-season"></div>
 
       <div class="tabpane hidden" id="tab-log">
         <div class="toolbar"><span class="muted small">What the microphone heard and what it became</span><div class="spacer"></div><button class="small" id="btnClearLog">Clear log</button></div>
@@ -170,7 +247,10 @@
         <button data-st="codes" class="active">Codes</button>
         <button data-st="players">Players</button>
         <button data-st="outcomes">Outcomes</button>
-        <button data-st="labels">Label groups</button>
+        <button data-st="labels">Labels</button>
+        <button data-st="voice">Voice commands</button>
+        <button data-st="kpis">KPIs</button>
+        <button data-st="templates">Templates</button>
         <button data-st="general">General</button>
       </div>
     </div>
@@ -184,7 +264,23 @@
   </div>
 </div>
 
+<!-- GENERIC DIALOG -->
+<div class="modal hidden" id="dlg">
+  <div class="box dlgbox">
+    <div class="head"><h2 id="dlgTitle"></h2><button id="dlgX" class="small">✕</button></div>
+    <div class="body" id="dlgBody"></div>
+    <div class="foot" id="dlgFoot"></div>
+  </div>
+</div>
+
 <script src="vendor/vosk.js"></script>
+<script src="core.js"></script>
 <script src="app.js"></script>
+<script src="draw.js"></script>
+<script src="match.js"></script>
+<script src="playlist.js"></script>
+<script src="analysis.js"></script>
+<script src="io.js"></script>
+<script src="settings.js"></script>
 </body>
 </html>
