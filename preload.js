@@ -16,5 +16,9 @@ contextBridge.exposeInMainWorld('api', {
   exportClips: opts => ipcRenderer.invoke('export-clips', opts),
   cancelExport: () => ipcRenderer.invoke('cancel-export'),
   onExportProgress: cb => ipcRenderer.on('export-progress', (e, p) => cb(p)),
+  convertVideo: p => ipcRenderer.invoke('convert-video', p),
+  cachedConversion: p => ipcRenderer.invoke('cached-conversion', p),
+  cancelConvert: () => ipcRenderer.invoke('cancel-convert'),
+  onConvertProgress: cb => ipcRenderer.on('convert-progress', (e, p) => cb(p)),
   onClosing: cb => ipcRenderer.on('app-closing', () => cb())
 });

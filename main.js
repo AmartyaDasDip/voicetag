@@ -124,7 +124,9 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => app.quit());
 
 /* ------------------------------------------------------------------ IPC */
-const VIDEO_FILTERS = [{ name: 'Video', extensions: ['mp4', 'm4v', 'mov', 'webm', 'mkv', 'avi', 'ts', 'mts', 'm2ts'] }, { name: 'All files', extensions: ['*'] }];
+const VIDEO_EXT = ['mp4', 'm4v', 'mov', 'qt', 'webm', 'mkv', 'avi', 'wmv', 'asf', 'flv', 'f4v', 'mpg', 'mpeg', 'mpe', 'm2v', 'mp2', 'vob',
+  'ts', 'mts', 'm2ts', 'tod', 'mod', '3gp', '3g2', 'ogv', 'ogg', 'mxf', 'dv', 'divx', 'xvid', 'rm', 'rmvb', 'y4m', 'hevc', 'h264', 'h265', '264', '265', 'insv', 'lrv'];
+const VIDEO_FILTERS = [{ name: 'All video files', extensions: VIDEO_EXT }, { name: 'All files', extensions: ['*'] }];
 
 ipcMain.handle('open-video', async () => {
   const r = await dialog.showOpenDialog(win, { title: 'Open match video', properties: ['openFile'], filters: VIDEO_FILTERS });
@@ -183,4 +185,37 @@ ipcMain.handle('export-clips', async (e, opts) => {
     return { ok: false, error: currentExport && currentExport.cancelled ? 'Export cancelled' : String(err.message || err) };
   } finally { currentExport = null; }
 });
+/* ---- convert any format to a playable MP4 (cached, done once per file) ---- */
+const crypto = require('crypto');
+let currentConvert = null;
+function convertedPathFor(p) {
+  const st = fs.statSync(p);
+  const key = crypto.createHash('sha1').update(path.resolve(p) + '|' + st.size + '|' + st.mtimeMs).digest('hex').slice(0, 16);
+  const dir = path.join(app.getPath('userData'), 'converted');
+  fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, path.basename(p).replace(/\.[^.]+$/, '').replace(/[^\w\- ]+/g, '_').slice(0, 60) + '-' + key + '.mp4');
+}
+ipcMain.handle('cached-conversion', async (e, p) => {
+  try { const out = convertedPathFor(p); if (fs.existsSync(out)) { allowedMedia.add(path.resolve(out)); return out; } } catch (err) { /* ignore */ }
+  return null;
+});
+ipcMain.handle('convert-video', async (e, p) => {
+  const ff = ffmpegPath();
+  if (!ff) return { ok: false, error: 'ffmpeg is missing from this build.' };
+  if (!p || !fs.existsSync(p)) return { ok: false, error: 'File not found: ' + p };
+  const out = convertedPathFor(p);
+  if (fs.existsSync(out)) { allowedMedia.add(path.resolve(out)); return { ok: true, path: out, cached: true }; }
+  currentConvert = exporter.createJob();
+  try {
+    const r = await exporter.convertToMp4({
+      ffmpeg: ff, input: p, output: out, job: currentConvert,
+      onProgress: pr => { try { e.sender.send('convert-progress', pr); } catch (err) { /* ignore */ } }
+    });
+    allowedMedia.add(path.resolve(out));
+    return { ok: true, path: out, remuxed: r.remuxed };
+  } catch (err) {
+    return { ok: false, error: currentConvert && currentConvert.cancelled ? 'cancelled' : String(err.message || err) };
+  } finally { currentConvert = null; }
+});
+ipcMain.handle('cancel-convert', async () => { if (currentConvert) exporter.cancel(currentConvert); return true; });
 ipcMain.handle('cancel-export', async () => { if (currentExport) exporter.cancel(currentExport); return true; });

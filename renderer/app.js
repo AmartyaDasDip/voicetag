@@ -39,6 +39,10 @@ const api = window.api || (() => {
     exportClips: async () => ({ ok: false, error: 'Video export only works in the installed desktop app.' }),
     cancelExport: async () => {},
     onExportProgress: () => {},
+    convertVideo: async () => ({ ok: false, error: 'Conversion only works in the installed desktop app.' }),
+    cachedConversion: async () => null,
+    cancelConvert: async () => {},
+    onConvertProgress: () => {},
     onClosing: () => {}
   };
 })();
@@ -338,11 +342,59 @@ function parseUtterance(text) {
 
 /* ---------------------------------------------------------------- VIDEO */
 const video = $('#video');
-function setVideo(info) {
+let checkingVideo = false;
+// Resolves true if the browser engine can show this video, false otherwise.
+function canPlayCurrent(timeoutMs = 12000) {
+  return new Promise(resolve => {
+    let done = false;
+    const finish = ok => { if (done) return; done = true; clearTimeout(tm); video.removeEventListener('loadedmetadata', onMeta); video.removeEventListener('error', onErr); resolve(ok); };
+    const onMeta = () => finish(video.videoWidth > 0);
+    const onErr = () => finish(false);
+    const tm = setTimeout(() => finish(video.readyState >= 1 && video.videoWidth > 0), timeoutMs);
+    if (video.readyState >= 1) return finish(video.videoWidth > 0);
+    video.addEventListener('loadedmetadata', onMeta);
+    video.addEventListener('error', onErr);
+  });
+}
+// Opens any video: plays it directly when possible, otherwise converts it to MP4 once (cached).
+async function loadVideo(info) {
+  if (!info) return;
+  if (!api.isDesktop || !info.path) { setVideo(info); return; }
+  const cached = await api.cachedConversion(info.path);
+  if (cached) { setVideo(info, cached); return; }
+  checkingVideo = true;
+  setVideo(info);
+  const ok = await canPlayCurrent();
+  checkingVideo = false;
+  if (ok) return;
+  video.removeAttribute('src'); video.load();
+  $('#convBox').classList.remove('hidden');
+  $('#convBar').style.width = '0%';
+  $('#convText').textContent = 'Starting…';
+  const r = await api.convertVideo(info.path);
+  $('#convBox').classList.add('hidden');
+  if (r.ok) {
+    video.src = api.mediaUrl(r.path);
+    videoInfo.playPath = r.path;
+    $('#drop').classList.add('hidden');
+    toast('Video ready' + (r.remuxed ? ' (quick re-wrap, no quality loss)' : ' (converted to MP4)'), 'ok', 3000);
+  } else if (r.error === 'cancelled') {
+    toast('Conversion cancelled', 'info');
+  } else {
+    alert('This video could not be opened:\n\n' + r.error);
+  }
+}
+api.onConvertProgress(p => {
+  $('#convBar').style.width = (p.percent || 0) + '%';
+  $('#convText').textContent = p.duration ? `${p.percent}%  –  ${fmtTime(p.seconds || 0)} of ${fmtTime(p.duration)} converted` : 'Converting…';
+});
+$('#convCancel').onclick = () => api.cancelConvert();
+
+function setVideo(info, playPath) {
   if (!info) return;
   autosaveNow();
-  video.src = info.url || api.mediaUrl(info.path);
-  videoInfo = { path: info.path || '', name: info.name, size: info.size };
+  video.src = info.url || api.mediaUrl(playPath || info.path);
+  videoInfo = { path: info.path || '', name: info.name, size: info.size, playPath: playPath || '' };
   document.title = info.name + ' – VoiceTag';
   $('#drop').classList.add('hidden');
   sessionKey = 'vt_session_' + (info.path || info.name) + '_' + info.size;
@@ -357,7 +409,7 @@ function setVideo(info) {
   renderAll();
   toast('Loaded ' + info.name, 'info');
 }
-async function openVideo() { const r = await api.openVideo(); if (r) setVideo(r); }
+async function openVideo() { const r = await api.openVideo(); if (r) loadVideo(r); }
 $('#btnLoad').onclick = openVideo;
 const wrap = $('#videoWrap');
 wrap.addEventListener('dragover', e => { e.preventDefault(); $('#drop').classList.add('over'); });
@@ -366,10 +418,10 @@ wrap.addEventListener('drop', async e => {
   e.preventDefault(); $('#drop').classList.remove('over');
   const f = [...e.dataTransfer.files][0];
   if (!f) return;
-  if (api.isDesktop) { const r = await api.registerMedia(api.pathForFile(f)); if (r) setVideo(r); }
+  if (api.isDesktop) { const r = await api.registerMedia(api.pathForFile(f)); if (r) loadVideo(r); }
   else setVideo({ path: '', name: f.name, size: f.size, url: URL.createObjectURL(f) });
 });
-video.addEventListener('error', () => { if (video.getAttribute('src')) toast('This video could not be played. Try converting it to MP4 (H.264).', 'bad', 6000); });
+video.addEventListener('error', () => { if (!checkingVideo && video.getAttribute('src')) toast('This video could not be played. Try converting it to MP4 (H.264).', 'bad', 6000); });
 function togglePlay() { if (!video.src) return; video.paused ? video.play() : video.pause(); }
 function seek(d) { if (!video.src) return; video.currentTime = Math.max(0, Math.min((video.duration || 1e9), video.currentTime + d)); }
 $('#btnPlay').onclick = togglePlay;
@@ -837,6 +889,7 @@ function renderTimeline() {
   const d = video.duration || 0;
   const rows = config.codes.filter(c => events.some(e => e.codeId === c.id) || open[c.id]);
   const unknown = [...new Set(events.filter(e => !VOC.codesById[e.codeId]).map(e => e.code))];
+  $('#tlHead').style.display = (rows.length || unknown.length) ? '' : 'none';
   if (!rows.length && !unknown.length) { $('#tlRows').innerHTML = '<div class="tlempty">Your tags will appear here, one row per code.</div>'; updateTime(); return; }
   const bars = list => d ? list.map(e => `<div class="bar" style="left:${(e.start / d * 100).toFixed(3)}%;width:${(Math.max(0.2, e.end - e.start) / d * 100).toFixed(3)}%;background:var(--c)" title="${fmtTime(e.t)} ${esc(eventText(e))}"></div>`).join('') : '';
   let html = rows.map(c => {
@@ -1004,7 +1057,7 @@ async function exportVideo(mode) {
   $('#plExportOne').disabled = $('#plExportSep').disabled = true;
   try {
     const r = await api.exportClips({
-      videoPath: videoInfo.path, mode, quality: $('#plQuality').value,
+      videoPath: videoInfo.playPath || videoInfo.path, mode, quality: $('#plQuality').value,
       defaultName: baseName(videoInfo.name) + ' - ' + codes.replace(/[\\/:*?"<>|]/g, '') + '.mp4',
       clips: clips.map(c => ({ start: Math.max(0, c.start), end: c.end, name: clipName(c) }))
     });
@@ -1187,7 +1240,7 @@ $('#btnXlsx').onclick = async () => {
 };
 
 $('#btnSaveProj').onclick = () => {
-  const proj = { app: 'VoiceTag', version: 2, savedAt: new Date().toISOString(), video: videoInfo, config, events, nextId };
+  const proj = { app: 'VoiceTag', version: 2, savedAt: new Date().toISOString(), video: { path: videoInfo.path, name: videoInfo.name, size: videoInfo.size }, config, events, nextId };
   saveText(baseName(videoInfo.name) + '.vtproj', JSON.stringify(proj, null, 1), 'vtproj', 'VoiceTag project');
 };
 $('#btnOpenProj').onclick = async () => {
@@ -1204,7 +1257,7 @@ $('#btnOpenProj').onclick = async () => {
     let loaded = false;
     if (p.video && p.video.path && api.isDesktop) {
       const r = await api.registerMedia(p.video.path);
-      if (r) { setVideo(r); loaded = true; }
+      if (r) { await loadVideo(r); loaded = true; }
       else alert('The video for this project was not found at:\n' + p.video.path + '\n\nOpen the video manually with "Open video".');
     }
     events = evs; nextId = p.nextId || (Math.max(0, ...evs.map(x => x.id)) + 1); undoStack = []; open = {};

@@ -36,10 +36,17 @@
         <div id="drop">
           <div class="big">🎬</div>
           <div><b>Drop a match video here</b> or click <b>Open video</b></div>
-          <div style="font-size:12px">MP4 / MOV / WEBM play best.</div>
+          <div style="font-size:12px">Any format works: MP4, MOV, AVI, MKV, WMV, FLV, MPEG, MTS… (unusual formats are converted to MP4 once)</div>
         </div>
         <div id="toast"></div>
         <div id="plBanner" class="hidden"></div>
+        <div id="convBox" class="hidden">
+          <div class="ctitle">Converting video to MP4…</div>
+          <div class="small muted" id="convSub">This format can’t be played directly, so VoiceTag converts it once. Next time it opens instantly.</div>
+          <div class="bar"><div id="convBar"></div></div>
+          <div class="small" id="convText">Starting…</div>
+          <button class="small" id="convCancel">Cancel</button>
+        </div>
       </div>
 
       <div id="controls">

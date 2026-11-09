@@ -125,3 +125,6 @@ h4{margin:16px 0 6px}
 .ocheck input{width:auto!important}
 .groupbox{border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:12px}
 #confirmMsg{flex:1;font-size:13px}
+#convBox{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(460px,90%);background:rgba(14,18,23,.95);border:1px solid var(--accent);border-radius:10px;padding:16px 18px;text-align:center}
+#convBox .ctitle{font-weight:700;font-size:16px;margin-bottom:4px}
+#convBar{height:100%;width:0;background:var(--accent);transition:width .3s}

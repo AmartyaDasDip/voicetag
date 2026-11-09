@@ -26,6 +26,13 @@ How to build the installer (one time)
    If Windows says "Windows protected your PC": More info → Run anyway (the app is not code-signed).
 5. After installing, VoiceTag runs fully offline, including voice recognition.
 
+Video formats
+-------------
+Any format ffmpeg can read opens: MP4, MOV, AVI, MKV, WMV, FLV, MPEG/MPG, MTS/M2TS, TS, VOB, 3GP, MXF, WEBM...
+If Windows can't play a file directly, VoiceTag converts it to MP4 once (H.264 video is only re-wrapped,
+which takes seconds). Converted copies are kept in %APPDATA%\VoiceTag\converted and reused next time.
+Exported clips are always MP4.
+
 What is inside
 --------------
 main.js / preload.js / exporter.js   desktop shell, file access, video export (ffmpeg)

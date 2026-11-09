@@ -89,4 +89,55 @@ async function exportClips(opts) {
   }
 }
 
-module.exports = { createJob, cancel, exportClips, clipArgs };
+/* ------------------------------------------------------------------ IMPORT CONVERSION
+   Any video ffmpeg can read is turned into a browser-playable MP4 (H.264 + AAC).
+   If the video is already H.264 (8-bit) it is only re-wrapped (fast, no quality loss). */
+function probe(ffmpeg, file) {
+  return new Promise(resolve => {
+    const p = spawn(ffmpeg, ['-hide_banner', '-i', file], { windowsHide: true });
+    let err = '';
+    p.stderr.on('data', d => { err += d.toString(); });
+    p.on('error', () => resolve({ text: '' }));
+    p.on('close', () => {
+      const dur = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(err);
+      const v = /Stream #[^\n]*Video:\s*([a-z0-9_]+)([^\n]*)/i.exec(err);
+      const a = /Stream #[^\n]*Audio:\s*([a-z0-9_]+)/i.exec(err);
+      resolve({
+        text: err,
+        duration: dur ? Number(dur[1]) * 3600 + Number(dur[2]) * 60 + Number(dur[3]) : 0,
+        vcodec: v ? v[1].toLowerCase() : '',
+        vinfo: v ? v[2] : '',
+        acodec: a ? a[1].toLowerCase() : ''
+      });
+    });
+  });
+}
+
+async function convertToMp4({ ffmpeg, input, output, job, onProgress }) {
+  const info = await probe(ffmpeg, input);
+  if (!info.vcodec) throw new Error('No video stream found in this file (or the format is not supported).\n' + info.text.split('\n').slice(-4).join('\n'));
+  const tenBit = /p10|p12|10le|12le/.test(info.vinfo);
+  const canCopyVideo = info.vcodec === 'h264' && !tenBit;
+  const part = output + '.part.mp4';
+  const report = s => onProgress && onProgress({ percent: info.duration ? Math.min(99, Math.round(s / info.duration * 100)) : 0, seconds: s, duration: info.duration });
+  const audioArgs = info.acodec === 'aac' ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '160k', '-ac', '2'];
+  const encodeArgs = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-pix_fmt', 'yuv420p'];
+  const build = videoArgs => ['-hide_banner', '-y', '-fflags', '+genpts', '-i', input, '-map', '0:v:0', '-map', '0:a:0?',
+    ...videoArgs, ...audioArgs, '-movflags', '+faststart', '-f', 'mp4', part];
+  try {
+    if (canCopyVideo) {
+      try { await runFfmpeg(ffmpeg, build(['-c:v', 'copy']), job, report); }
+      catch (e) { if (job.cancelled) throw e; await runFfmpeg(ffmpeg, build(encodeArgs), job, report); }
+    } else {
+      await runFfmpeg(ffmpeg, build(encodeArgs), job, report);
+    }
+    fs.renameSync(part, output);
+    onProgress && onProgress({ percent: 100, duration: info.duration });
+    return { output, remuxed: canCopyVideo, vcodec: info.vcodec };
+  } catch (e) {
+    try { fs.rmSync(part, { force: true }); } catch (err) { /* ignore */ }
+    throw e;
+  }
+}
+
+module.exports = { createJob, cancel, exportClips, clipArgs, probe, convertToMp4 };
