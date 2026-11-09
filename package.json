@@ -1,0 +1,53 @@
+{
+  "name": "voicetag",
+  "productName": "VoiceTag",
+  "version": "1.0.0",
+  "description": "Football match tagging with code window, hotkeys and offline voice commands",
+  "main": "main.js",
+  "author": "Dumitru Ciprian Lulciuc",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --x64"
+  },
+  "dependencies": {
+    "ffmpeg-static": "5.3.0"
+  },
+  "devDependencies": {
+    "electron": "38.8.6",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "com.voicetag.app",
+    "productName": "VoiceTag",
+    "copyright": "VoiceTag",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": [
+      "main.js",
+      "preload.js",
+      "exporter.js",
+      "renderer/**/*",
+      "!renderer/_test.mp4",
+      "build/icon.png",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": "model", "to": "model", "filter": ["model.tar.gz"] }
+    ],
+    "asarUnpack": ["node_modules/ffmpeg-static/**"],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "VoiceTag",
+      "artifactName": "VoiceTag-Setup-${version}.${ext}"
+    }
+  }
+}

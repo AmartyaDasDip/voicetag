@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' app: blob: data:; script-src 'self' app: blob: 'unsafe-eval' 'wasm-unsafe-eval'; worker-src 'self' app: blob:; media-src 'self' app: blob: file:; style-src 'self' 'unsafe-inline'; img-src 'self' app: data: blob:; connect-src 'self' app: blob: data:">
+<title>VoiceTag</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand">🎙 Voice<span>Tag</span></div>
+    <button id="btnLoad" title="Open a match video">📂 Open video</button>
+    <label>Period
+      <select id="selPeriod">
+        <option value="1">1st half</option><option value="2">2nd half</option>
+        <option value="ET1">Extra time 1</option><option value="ET2">Extra time 2</option>
+      </select>
+    </label>
+    <div class="sep"></div>
+    <button id="btnMic">🎤 Voice: off <kbd>M</kbd></button>
+    <div class="spacer"></div>
+    <button id="btnXlsx" title="Excel workbook">⬇ Excel</button>
+    <button id="btnCsv">⬇ CSV</button>
+    <button id="btnXml" title="Sportscode / Hudl style XML timeline">⬇ XML</button>
+    <div class="sep"></div>
+    <button id="btnSaveProj" title="Save tags + settings to a project file">💾 Save project</button>
+    <button id="btnOpenProj">📁 Open project</button>
+    <button id="btnSettings">⚙ Settings</button>
+  </header>
+
+  <main>
+    <section id="left">
+      <div id="videoWrap">
+        <video id="video" preload="auto"></video>
+        <div id="drop">
+          <div class="big">🎬</div>
+          <div><b>Drop a match video here</b> or click <b>Open video</b></div>
+          <div style="font-size:12px">MP4 / MOV / WEBM play best.</div>
+        </div>
+        <div id="toast"></div>
+        <div id="plBanner" class="hidden"></div>
+      </div>
+
+      <div id="controls">
+        <button id="btnBack5" title="Back 5 s (←)">⏪ 5s</button>
+        <button id="btnPlay" title="Play / pause (Space)">▶ Play</button>
+        <button id="btnFwd5" title="Forward 5 s (→)">5s ⏩</button>
+        <span id="timeDisp">00:00 / 00:00</span>
+        <label>Speed
+          <select id="selSpeed">
+            <option>0.25</option><option>0.5</option><option>0.75</option><option selected>1</option><option>1.25</option><option>1.5</option><option>2</option><option>3</option>
+          </select>
+        </label>
+        <div class="spacer"></div>
+        <span class="muted small"><kbd>Space</kbd> play · <kbd>←</kbd><kbd>→</kbd> 5s · <kbd>Shift</kbd>+arrows 1s · <kbd>,</kbd><kbd>.</kbd> frame · <kbd>M</kbd> voice · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo</span>
+      </div>
+
+      <div id="timeline" title="Click to jump. One row per code."><div id="tlRows"></div><div id="tlHead"></div></div>
+
+      <div id="heardBar">
+        <span class="lbl">Heard</span>
+        <span id="heardText" class="muted">—</span>
+        <span id="micState">voice off</span>
+      </div>
+      <div id="typeRow">
+        <input id="cmdInput" placeholder="Type a command and press Enter, e.g.  right back pass unsuccessful   ( / to focus )">
+        <button id="btnType">Tag</button>
+      </div>
+    </section>
+
+    <section id="right">
+      <div class="tabs" id="rightTabs">
+        <button data-tab="code" class="active">Code window</button>
+        <button data-tab="events">Events <span id="evCount" class="muted"></span></button>
+        <button data-tab="playlist">Playlist</button>
+        <button data-tab="summary">Summary</button>
+        <button data-tab="log">Voice log</button>
+        <button data-tab="help">Help</button>
+      </div>
+
+      <div class="tabpane" id="tab-code">
+        <div class="toolbar">
+          <span class="muted small">Click a button or press its key. Labels go to: <b id="targetInfo">—</b></span>
+          <div class="spacer"></div>
+          <button class="small" id="btnEditCW">✎ Edit buttons</button>
+        </div>
+        <div id="codeWindow"></div>
+      </div>
+
+      <div class="tabpane hidden" id="tab-events">
+        <div class="toolbar">
+          <select id="fCode"><option value="">All codes</option></select>
+          <select id="fPlayer"><option value="">All players</option></select>
+          <div class="spacer"></div>
+          <button class="small" id="btnUndo" title="Remove the last tag (Ctrl+Z)">↶ Undo</button>
+          <button class="small danger" id="btnClear">Clear all</button>
+        </div>
+        <table id="evTable">
+          <thead><tr><th style="width:60px">Time</th><th>Code</th><th>Player</th><th>Outcome</th><th>Other labels</th><th style="width:44px">Len</th><th style="width:28px"></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div id="evEmpty" class="muted empty">No tags yet.</div>
+      </div>
+
+      <div class="tabpane hidden" id="tab-playlist">
+        <div class="plfilters">
+          <div id="plCodes" class="chips"></div>
+          <div class="toolbar">
+            <select id="plPlayer"><option value="">Any player</option></select>
+            <select id="plOutcome"><option value="">Any outcome</option></select>
+            <div class="spacer"></div>
+            <label class="small"><input type="checkbox" id="plAll" checked> select all</label>
+          </div>
+        </div>
+        <div class="toolbar">
+          <button id="plPlay" class="primary">▶ Play selected</button>
+          <button id="plPrev" title="Previous clip">⏮</button>
+          <button id="plNext" title="Next clip">⏭</button>
+          <button id="plStop">⏹ Stop</button>
+          <span class="muted small" id="plInfo"></span>
+        </div>
+        <table id="plTable"><thead><tr><th style="width:24px"></th><th style="width:60px">Start</th><th>Clip</th><th style="width:48px">Len</th></tr></thead><tbody></tbody></table>
+        <div class="exportbox">
+          <div class="toolbar">
+            <b>Export video</b>
+            <select id="plQuality" title="Accurate = exact cut points (slower). Fast = no re-encoding, cuts snap to nearby keyframes.">
+              <option value="accurate">Accurate cuts</option>
+              <option value="fast">Fast (approx. cuts)</option>
+            </select>
+          </div>
+          <div class="toolbar">
+            <button id="plExportOne">🎞 One video (clips joined)</button>
+            <button id="plExportSep">📁 Separate clip files</button>
+          </div>
+          <div id="plProgress" class="hidden"><div class="bar"><div id="plBar"></div></div><span id="plProgText" class="small muted"></span> <button class="small" id="plCancel">Cancel</button></div>
+        </div>
+      </div>
+
+      <div class="tabpane hidden" id="tab-summary">
+        <div class="toolbar"><span class="muted small">Player × code: total (success %)</span></div>
+        <div style="overflow:auto"><table id="sumTable" class="sum"></table></div>
+        <h4>Duration codes</h4>
+        <table id="durTable" class="sum"></table>
+      </div>
+
+      <div class="tabpane hidden" id="tab-log">
+        <div class="toolbar"><span class="muted small">What the microphone heard and what it became</span><div class="spacer"></div><button class="small" id="btnClearLog">Clear log</button></div>
+        <div id="logList"></div>
+      </div>
+
+      <div class="tabpane hidden help" id="tab-help"></div>
+    </section>
+  </main>
+</div>
+
+<!-- SETTINGS -->
+<div class="modal hidden" id="settings">
+  <div class="box">
+    <div class="head">
+      <h2>⚙ Settings</h2>
+      <div class="tabs" style="border:none" id="setTabs">
+        <button data-st="codes" class="active">Codes</button>
+        <button data-st="players">Players</button>
+        <button data-st="outcomes">Outcomes</button>
+        <button data-st="labels">Label groups</button>
+        <button data-st="general">General</button>
+      </div>
+    </div>
+    <div class="body" id="setBody"></div>
+    <div class="foot">
+      <span id="confirmMsg" class="muted"></span>
+      <button id="setReset" class="danger">Reset to defaults</button>
+      <button id="setCancel">Cancel</button>
+      <button id="setSave" class="primary">Save settings</button>
+    </div>
+  </div>
+</div>
+
+<script src="vendor/vosk.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

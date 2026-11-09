@@ -1,0 +1,57 @@
+name: Build Windows installer
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Restore voice model from cache
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: model/model.tar.gz
+          key: vosk-small-en-us-0.15-${{ hashFiles('tools/get-model.ps1') }}
+
+      - name: Download voice model
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: ./tools/get-model.ps1
+
+      - name: Install components (Electron, ffmpeg)
+        run: npm ci --no-audit --no-fund
+
+      - name: Build installer
+        run: npx electron-builder --win nsis --x64 --publish never
+
+      - name: Keep installer as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceTag-Setup
+          path: dist/*.exe
+
+      - name: Publish on the Releases page
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: VoiceTag build ${{ github.run_number }}
+          body: |
+            Download **VoiceTag-Setup-1.0.0.exe** below and double-click it to install.
+            If Windows says "Windows protected your PC": More info → Run anyway.
+          files: dist/*.exe
+          make_latest: true

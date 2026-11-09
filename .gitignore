@@ -1,0 +1,4 @@
+node_modules/
+dist/
+model/*.tar.gz
+renderer/_test.mp4
