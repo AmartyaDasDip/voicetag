@@ -1,0 +1,44 @@
+name: Export AI models (one-off)
+
+on:
+  push:
+    paths: ['engine/models/EXPORT_REQUEST.txt']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install exporter
+        run: |
+          pip install --quiet torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install --quiet ultralytics onnx onnxslim onnxruntime
+      - name: Export YOLO11 n / s to ONNX (1280 x 736, rectangular for 16:9 video)
+        run: |
+          mkdir -p engine/models
+          cd engine/models
+          for m in yolo11n yolo11s; do
+            yolo export model=$m.pt format=onnx imgsz=736,1280 opset=17 simplify=True dynamic=False
+            rm -f $m.pt
+          done
+          ls -la
+          python - <<'PY'
+          import onnxruntime as ort, numpy as np
+          for m in ['yolo11n.onnx','yolo11s.onnx']:
+              s=ort.InferenceSession(m); i=s.get_inputs()[0]; o=s.get_outputs()[0]
+              print(m, i.name, i.shape, o.name, o.shape)
+          PY
+      - name: Commit models
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add engine/models/*.onnx
+          git commit -m "Add exported YOLO11 ONNX models (1280x736)" || echo "nothing to commit"
+          git push
