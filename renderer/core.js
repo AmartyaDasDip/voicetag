@@ -2,7 +2,8 @@
 /* =====================================================================
    VoiceTag core: helpers, settings model, voice-command matching
    ===================================================================== */
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '2.0.0';
+const APP_NAME = 'TACTIQ ANALYST';
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -61,6 +62,7 @@ const Dlg = {
         foot.appendChild(el);
       });
       $('#dlgX').onclick = () => done(undefined);
+      $('#dlg').classList.toggle('calbig', !!opts.wide);
       $('#dlg').classList.remove('hidden');
       if (opts.onOpen) opts.onOpen($('#dlgBody'));
       const first = $('#dlgBody').querySelector('input,textarea,select');
@@ -147,30 +149,37 @@ function autoSay(p) {
   return list.join(', ');
 }
 function DEFAULT_CODES() {
-  const C = (id, name, type, hotkey, say, outcomes, def, color, endLoc) => ({
-    id, name, type, hotkey, say, outcomes, def, color, endLoc: !!endLoc,
+  const C = (id, name, type, hotkey, say, outcomes, def, color, category, endLoc) => ({
+    id, name, type, hotkey, say, outcomes, def, color, category, endLoc: !!endLoc,
     lead: type === 'duration' ? 2 : 5, lag: type === 'duration' ? 2 : 5
   });
+  const IN = 'In possession', OUT = 'Out of possession', DUEL = 'Duels', SP = 'Set pieces', OTH = 'Other';
   return [
-    C('pass', 'Pass', 'instant', 'P', 'pass, passes, past', ['succ', 'unsucc'], 'succ', '#3ea6ff', true),
-    C('cross', 'Cross', 'instant', 'C', 'cross, crosses, cross ball', ['succ', 'unsucc'], 'succ', '#a66bff', true),
-    C('shot', 'Shot', 'instant', 'S', 'shot, shoot, shots', ['ont', 'offt', 'goal', 'blocked'], '', '#ff5a5f'),
-    C('gduel', 'Ground Duel', 'instant', 'G', 'ground duel, ground dual, ground jewel', ['won', 'lost'], '', '#f5b041'),
-    C('aduel', 'Aerial Duel', 'instant', 'A', 'aerial duel, aerial dual, air duel, header duel', ['won', 'lost'], '', '#e67e22'),
-    C('dribble', 'Dribble', 'instant', 'D', 'dribble, take on', ['succ', 'unsucc'], 'succ', '#1abc9c'),
-    C('tackle', 'Tackle', 'instant', 'T', 'tackle, tackles', ['won', 'lost'], 'won', '#2ecc71'),
-    C('intercept', 'Interception', 'instant', 'I', 'interception, intercept', [], '', '#17a589'),
-    C('clear', 'Clearance', 'instant', 'L', 'clearance, clear', [], '', '#95a5a6'),
-    C('recovery', 'Ball Recovery', 'instant', 'R', 'recovery, ball recovery', [], '', '#58d68d'),
-    C('loss', 'Possession Lost', 'instant', 'O', 'possession lost, lost possession, turnover', [], '', '#c0392b'),
-    C('foulc', 'Foul Committed', 'instant', 'F', 'foul, foul committed', [], '', '#d35400'),
-    C('foulw', 'Foul Won', 'instant', 'W', 'foul won, won a foul', [], '', '#f39c12'),
-    C('keypass', 'Key Pass', 'instant', 'K', 'key pass, chance created', [], '', '#5dade2', true),
-    C('save', 'Save', 'instant', 'V', 'save, keeper save', [], '', '#af7ac5'),
-    C('buildup', 'Build-up', 'duration', 'B', 'build up, buildup', [], '', '#00bcd4'),
-    C('counter', 'Counter-attack', 'duration', 'X', 'counter attack, counter', [], '', '#ff4081'),
-    C('setpiece', 'Set Piece', 'duration', 'E', 'set piece, set play', [], '', '#cddc39'),
-    C('press', 'High Press', 'duration', 'H', 'high press, press, pressing', [], '', '#ff9800')
+    C('pass', 'Pass', 'instant', 'P', 'pass, passes, past', ['succ', 'unsucc'], 'succ', '#3ea6ff', IN, true),
+    C('lbpass', 'Line-breaking Pass', 'instant', 'L', 'line breaking pass, line break, line breaker', ['succ', 'unsucc'], 'succ', '#5dade2', IN, true),
+    C('f3entry', 'Final Third Entry', 'instant', 'F', 'final third entry, entry', [], '', '#48c9b0', IN, true),
+    C('cross', 'Cross', 'instant', 'C', 'cross, crosses, cross ball', ['succ', 'unsucc'], 'succ', '#a66bff', IN, true),
+    C('shot', 'Shot', 'instant', 'S', 'shot, shoot, shots', ['ont', 'offt', 'goal', 'blocked'], '', '#ff5a5f', IN),
+    C('goal', 'Goal', 'instant', 'G', 'goal, scored', [], '', '#ffd23b', IN),
+    C('keypass', 'Key Pass', 'instant', 'Y', 'key pass, chance created', [], '', '#85c1e9', IN, true),
+    C('dribble', 'Dribble', 'instant', 'D', 'dribble, take on', ['succ', 'unsucc'], 'succ', '#1abc9c', IN),
+    C('buildup', 'Build-up', 'duration', 'B', 'build up, buildup', [], '', '#00bcd4', IN),
+    C('counter', 'Counter Attack', 'duration', 'A', 'counter attack, counter', [], '', '#ff4081', IN),
+    C('intercept', 'Interception', 'instant', 'I', 'interception, intercept', [], '', '#17a589', OUT),
+    C('tackle', 'Tackle', 'instant', 'T', 'tackle, tackles', ['won', 'lost'], 'won', '#2ecc71', OUT),
+    C('recovery', 'Ball Recovery', 'instant', 'R', 'recovery, ball recovery', [], '', '#58d68d', OUT),
+    C('clear', 'Clearance', 'instant', 'X', 'clearance, clear', [], '', '#95a5a6', OUT),
+    C('highpress', 'High Press', 'duration', 'H', 'high press, pressing', [], '', '#ff9800', OUT),
+    C('midblock', 'Mid Block', 'duration', 'M', 'mid block, middle block', [], '', '#f5b041', OUT),
+    C('lowblock', 'Low Block', 'duration', 'O', 'low block', [], '', '#dc7633', OUT),
+    C('gduel', 'Ground Duel', 'instant', 'W', 'ground duel, ground dual, ground jewel', ['won', 'lost'], '', '#f4d03f', DUEL),
+    C('aduel', 'Aerial Duel', 'instant', 'Q', 'aerial duel, aerial dual, air duel, header duel', ['won', 'lost'], '', '#e67e22', DUEL),
+    C('turnover', 'Turnover', 'instant', 'U', 'turnover, possession lost, lost possession', [], '', '#c0392b', OTH),
+    C('foulc', 'Foul Committed', 'instant', 'E', 'foul, foul committed', [], '', '#d35400', OTH),
+    C('foulw', 'Foul Won', 'instant', 'Z', 'foul won, won a foul', [], '', '#f39c12', OTH),
+    C('save', 'Save', 'instant', 'V', 'save, keeper save', [], '', '#af7ac5', OTH),
+    C('corner', 'Corner', 'duration', 'K', 'corner, corner kick', [], '', '#cddc39', SP),
+    C('freekick', 'Free Kick', 'duration', 'J', 'free kick', [], '', '#b8e994', SP)
   ];
 }
 function DEFAULT_OUTCOMES() {
@@ -213,13 +222,14 @@ function DEFAULT_CONFIG() {
       offset: 1, hotkeyOffset: 0, strictness: 0.72, beep: true, xmlCode: 'code',
       homeName: 'Home', awayName: 'Opposition', voiceControl: true, useGrammar: true,
       ptt: false, pttKey: 'ControlRight', samePlayerSay: 'same player, same, him',
-      askLocation: true, autoZone: true, freezeDur: 3, titleDur: 2.5
+      askLocation: true, autoZone: true, freezeDur: 3, titleDur: 2.5, micKey: 'F9',
+      homeColor: '#3ea6ff', awayColor: '#ff5a5f', pitchL: 105, pitchW: 68
     },
     codes: DEFAULT_CODES(), outcomes: DEFAULT_OUTCOMES(), labelGroups: DEFAULT_LABELGROUPS(),
     players: DEFAULT_PLAYERS(), customPhrases: [], kpis: DEFAULT_KPIS()
   };
 }
-const RESERVED_KEYS = new Set([' ', 'M', ',', '.', '/']);
+const RESERVED_KEYS = new Set([' ', ',', '.', '/', '[', ']']);
 const CONTROL_WORDS = [
   { cmd: 'undo', aliases: ['undo', 'undo that', 'undo last', 'delete last', 'delete that', 'remove last', 'scratch that', 'cancel that'] },
   { cmd: 'pause', aliases: ['pause', 'pause video', 'stop video'] },
@@ -229,6 +239,7 @@ const CONTROL_WORDS = [
 const START_W = new Set(['start', 'starts', 'started', 'begin', 'begins', 'on']);
 const STOP_W = new Set(['stop', 'stops', 'stopped', 'end', 'ends', 'ended', 'finish', 'finished', 'off', 'over', 'done']);
 const SAME_PLAYER = { id: '__same', pos: 'same player', num: '' };
+const TEAMS = ['Home', 'Away', 'Neutral'];
 
 function migrate(c) {
   const d = DEFAULT_CONFIG();
@@ -245,6 +256,7 @@ function migrate(c) {
     if (!Array.isArray(x.outcomes)) x.outcomes = [];
     if (x.say == null) x.say = sayFrom(x.name, x.aliases);
     if (x.endLoc == null) x.endLoc = ['pass', 'cross', 'keypass'].includes(x.id);
+    if (x.category == null) x.category = '';
     delete x.aliases;
   });
   c.players.forEach(p => {

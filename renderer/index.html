@@ -3,14 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' app: blob: data:; script-src 'self' app: blob: 'unsafe-eval' 'wasm-unsafe-eval'; worker-src 'self' app: blob:; media-src 'self' app: blob: file:; style-src 'self' 'unsafe-inline'; img-src 'self' app: data: blob:; connect-src 'self' app: blob: data:">
-<title>VoiceTag</title>
+<title>TACTIQ ANALYST</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <div id="app">
   <header>
-    <div class="brand">🎙 Voice<span>Tag</span> <small id="appVer" class="muted"></small></div>
-    <button id="btnLoad" title="Open a match video (any format)">📂 Open video</button>
+    <button id="btnHome" title="Dashboard – projects">🏠</button>
+    <div class="brand">TACTIQ <span>ANALYST</span> <small id="appVer" class="muted"></small></div>
+    <span id="projTitle" class="projtitle" title="Current project"></span>
+    <button id="btnLoad" title="Open / add a match video (any format)">📂 Video</button>
     <label>Period
       <select id="selPeriod">
         <option value="1">1st half</option><option value="2">2nd half</option>
@@ -20,15 +22,18 @@
     <button id="btnKickoff" title="Mark the kick-off of the selected period at the current video time">⏱ Kick-off</button>
     <button id="btnEndPeriod" title="Mark the end of the selected period at the current video time">⏹ End period</button>
     <div class="sep"></div>
-    <button id="btnMic">🎤 Voice: off <kbd>M</kbd></button>
+    <button id="btnMic">🎤 Voice: off <kbd>F9</kbd></button>
     <button id="btnLive" title="Live mode: tag a match without video using a running clock">🔴 Live</button>
     <div class="spacer"></div>
     <button id="btnMatch" title="Match info, squad, substitutions, sync">📋 Match</button>
     <div class="menu">
       <button class="menubtn">📁 File ▾</button>
       <div class="menulist">
-        <button id="btnSaveProj">💾 Save project</button>
+        <button id="btnNewProj">✚ New project…</button>
+        <button id="btnSaveProj">💾 Save project <span class="muted small">Ctrl+S</span></button>
+        <button id="btnSaveAs">💾 Save project as…</button>
         <button id="btnOpenProj">📂 Open project</button>
+        <button id="btnBackups">⟲ Restore a backup</button>
         <hr>
         <button id="btnImportXml">⬆ Import Sportscode / Nacsport XML</button>
         <button id="btnImportPlayers">⬆ Import players (paste from Excel)</button>
@@ -42,6 +47,10 @@
         <button id="btnXlsx">📊 Excel</button>
         <button id="btnCsv">CSV</button>
         <button id="btnXml">XML timeline (Sportscode / Hudl)</button>
+        <button id="btnJson">JSON (whole project data)</button>
+        <hr>
+        <button id="btnTrackCsv">Tracking data – CSV</button>
+        <button id="btnTrackJson">Tracking data – JSON</button>
       </div>
     </div>
     <button id="btnSettings">⚙ Settings</button>
@@ -51,7 +60,12 @@
     <section id="left">
       <div id="videoWrap">
         <video id="video" preload="auto"></video>
+        <canvas id="trackView" class="hidden"></canvas>
         <canvas id="drawView" class="hidden"></canvas>
+        <div id="pitch2d" class="hidden"><div class="p2head"><b>2D</b><span id="p2info" class="muted small"></span><span class="spacer"></span>
+          <select id="p2size" class="small"><option value="s">S</option><option value="m" selected>M</option><option value="l">L</option></select>
+          <label class="small"><input type="checkbox" id="p2trails" checked> trails</label><button class="small" id="p2close">✕</button></div><div id="p2svg"></div></div>
+        <div id="trackBar" class="hidden"></div>
         <div id="drop">
           <div class="big">🎬</div>
           <div><b>Drop a match video here</b> or click <b>Open video</b></div>
@@ -93,20 +107,32 @@
       </div>
 
       <div id="controls">
-        <button id="btnBack5" title="Back 5 s (←)">⏪ 5s</button>
+        <button id="btnStop" title="Stop">⏹</button>
+        <button id="btnBack5" title="Back 5 s (←)">⏪</button>
+        <button id="btnFrameBack" title="Previous frame (,)">◀|</button>
         <button id="btnPlay" title="Play / pause (Space)">▶ Play</button>
-        <button id="btnFwd5" title="Forward 5 s (→)">5s ⏩</button>
+        <button id="btnFrameFwd" title="Next frame (.)">|▶</button>
+        <button id="btnFwd5" title="Forward 5 s (→)">⏩</button>
         <span id="timeDisp">00:00 / 00:00</span>
+        <button class="small" id="btnVideoInfo" title="Video information">ℹ</button>
         <span id="matchDisp" class="matchclock" title="Match clock (mark kick-off to start it)">Match —</span>
         <label>Speed
           <select id="selSpeed">
-            <option>0.25</option><option>0.5</option><option>0.75</option><option selected>1</option><option>1.25</option><option>1.5</option><option>2</option><option>3</option>
+            <option>0.25</option><option>0.5</option><option>0.75</option><option selected>1</option><option>1.25</option><option>1.5</option><option>2</option><option>3</option><option>4</option>
           </select>
         </label>
-        <button id="btnDraw" title="Draw on the video (telestration)">✏ Draw</button>
+        <button id="btnMute" title="Mute">🔊</button><input type="range" id="volRange" min="0" max="1" step="0.05" value="1" style="width:70px" title="Volume">
+        <button id="btnDraw" title="Draw on the video (telestration)">✏</button>
+        <button id="btnShot" title="Screenshot (saved in the project's screenshots folder)">📷</button>
+        <button id="btnFull" title="Full screen">⛶</button>
+        <button id="btn2D" title="2D pitch view of tracked players">🗺 2D</button>
+        <span class="sep"></span>
+        <button class="small" id="btnClipIn" title="Clip IN at current time ( [ )">[ In</button>
+        <button class="small" id="btnClipOut" title="Clip OUT at current time ( ] )">Out ]</button>
+        <button class="small" id="btnClipMake" title="Create a clip from IN to OUT">✂ Clip</button>
         <label title="Timeline zoom">🔍 <input type="range" id="tlZoom" min="1" max="40" value="1" step="1"></label>
         <div class="spacer"></div>
-        <span class="muted small"><kbd>Space</kbd> play · <kbd>←</kbd><kbd>→</kbd> 5s · <kbd>,</kbd><kbd>.</kbd> frame · <kbd>M</kbd> voice · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo</span>
+        <span class="muted small"><kbd>Ctrl</kbd>+<kbd>Z</kbd>/<kbd>Y</kbd> undo/redo</span>
       </div>
 
       <div id="timeline"><div id="tlInner"><div id="tlRows"></div><div id="tlHead"></div></div></div>
@@ -128,6 +154,7 @@
         <button data-tab="events">Events <span id="evCount" class="muted"></span></button>
         <button data-tab="playlist">Playlist</button>
         <button data-tab="summary">Stats</button>
+        <button data-tab="track">Track</button>
         <button data-tab="maps">Maps</button>
         <button data-tab="season">Season</button>
         <button data-tab="log">Voice log</button>
@@ -164,6 +191,7 @@
       </div>
 
       <div class="tabpane hidden" id="tab-playlist">
+        <div class="toolbar"><label class="small"><input type="radio" name="plSrc" value="events" checked> Tagged events</label><label class="small"><input type="radio" name="plSrc" value="clips"> Saved clips (In/Out) <span id="clipCount" class="muted"></span></label></div>
         <div id="plCodes" class="chips"></div>
         <div class="toolbar">
           <select id="plPlayer"><option value="">Any player</option></select>
@@ -214,13 +242,15 @@
         <h4>Phases</h4><table id="durTable" class="sum"></table>
       </div>
 
+      <div class="tabpane hidden" id="tab-track"></div>
+
       <div class="tabpane hidden" id="tab-maps">
         <div class="toolbar">
           <select id="mapTeam"><option value="Home">Home</option><option value="Away">Opposition</option><option value="">Both</option></select>
           <select id="mapPlayer"><option value="">All players</option></select>
           <select id="mapCode"><option value="">All codes</option></select>
           <select id="mapPeriod"><option value="">Whole match</option><option value="1">1st half</option><option value="2">2nd half</option></select>
-          <select id="mapMode"><option value="events">Events</option><option value="heat">Heatmap</option></select>
+          <select id="mapMode"><option value="events">Tag locations</option><option value="heat">Tag heatmap</option><option value="trackheat">Tracking heatmap</option><option value="avgpos">Average positions (tracking)</option></select>
         </div>
         <div id="mapBox"></div>
         <div class="small muted" id="mapInfo"></div>
@@ -236,6 +266,25 @@
       <div class="tabpane hidden help" id="tab-help"></div>
     </section>
   </main>
+</div>
+
+<!-- DASHBOARD -->
+<div id="dash" class="hidden">
+  <div class="dashbox">
+    <div class="dashhead"><div><div class="dashlogo">TACTIQ <span>ANALYST</span></div><div class="muted small" id="dashVer"></div></div><div class="spacer"></div><div id="sysInfo" class="small muted"></div></div>
+    <div class="dashgrid">
+      <div class="dashcol">
+        <button class="bigbtn primary" id="dNew">✚ New project</button>
+        <button class="bigbtn" id="dOpen">📂 Open project</button>
+        <button class="bigbtn" id="dQuick">⚡ Quick session (no project)</button>
+        <button class="bigbtn" id="dSettings">⚙ Settings</button>
+      </div>
+      <div class="dashcol wide">
+        <div class="toolbar"><b>Recent projects</b><div class="spacer"></div><input id="dSearch" placeholder="🔍 Search projects" style="width:220px"></div>
+        <div id="dRecent"></div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- SETTINGS -->
@@ -282,5 +331,8 @@
 <script src="analysis.js"></script>
 <script src="io.js"></script>
 <script src="settings.js"></script>
+<script src="project.js"></script>
+<script src="clips.js"></script>
+<script src="tracking.js"></script>
 </body>
 </html>

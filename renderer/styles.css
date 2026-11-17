@@ -175,3 +175,39 @@ textarea{width:100%;min-height:150px;font-family:Consolas,monospace;font-size:12
 .voicetest input{width:100%;padding:7px 9px}
 .tplcard{display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px}
 .tplcard b{flex:1}
+/* ---- v2.0: TACTIQ ANALYST ---- */
+.projtitle{font-size:12.5px;color:#cfe3ff;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.projtitle.dirty::after{content:" •";color:var(--warn)}
+#controls button{padding:5px 8px}
+.tlmark{position:absolute;top:0;bottom:0;width:2px;opacity:.85;z-index:2;pointer-events:none}
+#dash{position:fixed;inset:0;z-index:45;background:radial-gradient(circle at 20% 10%,#16283c,#0b0f14 60%);display:flex;align-items:center;justify-content:center}
+.dashbox{width:min(1100px,94vw);max-height:90vh;overflow:auto;background:rgba(22,27,34,.92);border:1px solid var(--line);border-radius:14px;padding:22px 26px}
+.dashhead{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+.dashlogo{font-size:28px;font-weight:800;letter-spacing:.04em}.dashlogo span{color:var(--accent)}
+.dashgrid{display:grid;grid-template-columns:260px 1fr;gap:22px}
+.dashcol{display:flex;flex-direction:column;gap:10px}
+.bigbtn{padding:14px 16px;font-size:15px;text-align:left;border-radius:10px}
+.reccard{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;cursor:pointer;background:var(--panel2)}
+.reccard:hover{border-color:var(--accent)}
+.reccard .t{font-weight:600}.reccard .m{font-size:12px;color:var(--muted)}
+.reccard .x{margin-left:auto}
+#trackView{position:absolute;z-index:4}
+#trackView.edit{cursor:crosshair}
+#trackBar{position:absolute;left:10px;top:10px;z-index:6;display:flex;gap:6px;align-items:center;background:rgba(14,18,23,.92);border:1px solid var(--ok);border-radius:8px;padding:5px 9px;font-size:13px;max-width:calc(100% - 20px);flex-wrap:wrap}
+#pitch2d{position:absolute;right:10px;bottom:10px;z-index:6;background:rgba(14,18,23,.94);border:1px solid var(--line);border-radius:8px;padding:6px;width:340px}
+#pitch2d.s{width:240px}#pitch2d.l{width:520px}
+#pitch2d .p2head{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+#p2svg svg{width:100%;display:block;border-radius:5px}
+.trk{display:flex;align-items:center;gap:6px;padding:5px 6px;border:1px solid var(--line);border-radius:7px;margin-bottom:4px;cursor:pointer;font-size:13px}
+.trk.sel{border-color:var(--ok);background:rgba(46,204,113,.12)}
+.trk .lb{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trk .cov{font-size:11px;color:var(--muted)}
+.badge{display:inline-block;font-size:11px;padding:1px 7px;border-radius:9px;border:1px solid var(--line)}
+.badge.good{border-color:var(--ok);color:var(--ok)}.badge.ok{border-color:var(--warn);color:var(--warn)}.badge.poor{border-color:var(--bad);color:var(--bad)}
+.calwrap{display:grid;grid-template-columns:1.6fr 1fr;gap:12px}
+.calwrap canvas{width:100%;background:#000;border-radius:6px;cursor:crosshair}
+.lmlist{max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:6px;margin-top:6px}
+.lmlist div{padding:3px 8px;cursor:pointer;font-size:12.5px;display:flex;gap:6px}
+.lmlist div.on{background:rgba(62,166,255,.2)}
+.lmlist div.done{color:var(--ok)}
+.calbig .box{width:min(1400px,97vw)!important;height:min(900px,95vh)!important}

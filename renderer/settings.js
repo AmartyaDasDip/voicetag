@@ -25,9 +25,10 @@ function renderSettings() {
   const body = $('#setBody'), g = draft.general;
   if (setTab === 'codes') {
     body.innerHTML = `<p class="muted"><b>Event</b> codes make a clip around one moment (lead = seconds before, lag = seconds after). <b>Phase</b> codes (e.g. Build-up) start on the first press and stop on the second. <b>📍end</b> = ask for an end point on the pitch (passes, crosses).</p>
-    <table><thead><tr><th style="width:140px">Code</th><th style="width:96px">Type</th><th style="width:52px">Key</th><th>Say ${sayHint}</th><th>Possible outcomes</th><th style="width:118px">Default outcome</th><th style="width:50px">Lead</th><th style="width:50px">Lag</th><th style="width:40px">📍end</th><th style="width:46px">Colour</th><th style="width:62px"></th></tr></thead><tbody>
+    <table><thead><tr><th style="width:140px">Code</th><th style="width:120px">Category</th><th style="width:96px">Type</th><th style="width:52px">Key</th><th>Say ${sayHint}</th><th>Possible outcomes</th><th style="width:118px">Default outcome</th><th style="width:50px">Lead</th><th style="width:50px">Lag</th><th style="width:40px">📍end</th><th style="width:46px">Colour</th><th style="width:62px"></th></tr></thead><tbody>
     ${draft.codes.map((c, i) => `<tr data-kind="codes" data-i="${i}">
       <td><input data-f="name" value="${esc(c.name)}"></td>
+      <td><input data-f="category" value="${esc(c.category || '')}" list="catList" placeholder="Events"></td>
       <td><select data-f="type"><option value="instant" ${c.type !== 'duration' ? 'selected' : ''}>Event</option><option value="duration" ${c.type === 'duration' ? 'selected' : ''}>Phase</option></select></td>
       <td>${hkInput(c.hotkey)}</td>
       <td><input data-f="say" value="${esc(c.say)}"></td>
@@ -38,7 +39,7 @@ function renderSettings() {
       <td><input type="checkbox" data-f="endLoc" ${c.endLoc ? 'checked' : ''} style="width:auto"></td>
       <td><input type="color" data-f="color" value="${esc(c.color || '#888888')}" style="padding:0;height:28px"></td>
       <td>${rowBtns}</td></tr>`).join('')}
-    </tbody></table>
+    </tbody></table><datalist id="catList">${[...new Set(draft.codes.map(c => c.category).filter(Boolean).concat(['In possession', 'Out of possession', 'Duels', 'Set pieces', 'Transitions', 'Other']))].map(c => `<option value="${esc(c)}">`).join('')}</datalist>
     <div class="toolbar" style="margin-top:10px"><button data-add="codes">+ Add event code</button><button data-add="phase">+ Add phase code</button></div>`;
   } else if (setTab === 'players') {
     body.innerHTML = `<p class="muted">The <b>Say</b> box is exactly what you will say for this player – e.g. <code>player eleven</code>, <code>nine</code>, <code>right back</code> or a nickname. Separate alternatives with commas. Numbers can be typed as digits (11) or words (eleven).</p>

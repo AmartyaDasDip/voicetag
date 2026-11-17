@@ -11,6 +11,9 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const RENDERER_DIR = path.join(__dirname, 'renderer');
+// keep settings, tags and season data from the VoiceTag versions
+app.setName('TACTIQ ANALYST');
+app.setPath('userData', path.join(app.getPath('appData'), 'VoiceTag'));
 // In the installed app the model sits in resources/model, during development in ./model
 function modelFile() {
   const candidates = [
@@ -93,7 +96,7 @@ let win = null;
 function createWindow() {
   win = new BrowserWindow({
     width: 1600, height: 950, minWidth: 1100, minHeight: 700,
-    backgroundColor: '#0e1217', title: 'VoiceTag',
+    backgroundColor: '#0e1217', title: 'TACTIQ ANALYST',
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true }
   });
@@ -114,6 +117,14 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// open .tactiq project files from Explorer (double-click), one window only
+const fileArg = argv => (argv || []).find(x => /\.tactiq$/i.test(x));
+let pendingFile = fileArg(process.argv);
+if (!app.requestSingleInstanceLock()) app.quit();
+app.on('second-instance', (e, argv) => {
+  if (win) { if (win.isMinimized()) win.restore(); win.focus(); const f = fileArg(argv); if (f) win.webContents.send('open-file', f); }
+});
+ipcMain.handle('pending-file', async () => { const f = pendingFile; pendingFile = null; return f || null; });
 app.whenReady().then(() => {
   protocol.handle('app', handleApp);
   session.defaultSession.setPermissionRequestHandler((wc, permission, cb) => cb(permission === 'media' || permission === 'clipboard-sanitized-write'));
@@ -156,7 +167,7 @@ ipcMain.handle('open-text-files', async (e, { filters }) => {
 });
 ipcMain.handle('read-text-files', async (e, paths) => {
   // only VoiceTag project files can be read this way
-  return Promise.all((paths || []).filter(p => /\.(vtproj|json)$/i.test(p)).map(async p => {
+  return Promise.all((paths || []).filter(p => /\.(vtproj|json|tactiq)$/i.test(p)).map(async p => {
     try { return { path: p, text: await fs.promises.readFile(p, 'utf8') }; } catch (err) { return { path: p, error: String(err.message || err) }; }
   }));
 });
@@ -249,3 +260,72 @@ ipcMain.handle('convert-video', async (e, p) => {
 });
 ipcMain.handle('cancel-convert', async () => { if (currentConvert) exporter.cancel(currentConvert); return true; });
 ipcMain.handle('cancel-export', async () => { if (currentExport) exporter.cancel(currentExport); return true; });
+
+/* ------------------------------------------------------------------ PROJECT FOLDERS */
+const PROJECT_DIRS = ['videos', 'clips', 'tracking_data', 'calibration', 'reports', 'screenshots', 'backups'];
+const safeDir = s => String(s || 'Match').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Match';
+ipcMain.handle('choose-directory', async (e, title) => {
+  const r = await dialog.showOpenDialog(win, { title: title || 'Choose a folder', properties: ['openDirectory', 'createDirectory'] });
+  return r.canceled ? null : r.filePaths[0];
+});
+ipcMain.handle('default-projects-dir', async () => path.join(app.getPath('documents'), 'TACTIQ ANALYST Projects'));
+ipcMain.handle('create-project', async (e, { parentDir, name }) => {
+  let dir = path.join(parentDir, safeDir(name)), n = 2;
+  while (fs.existsSync(dir)) dir = path.join(parentDir, safeDir(name) + ' (' + (n++) + ')');
+  fs.mkdirSync(dir, { recursive: true });
+  PROJECT_DIRS.forEach(d => fs.mkdirSync(path.join(dir, d), { recursive: true }));
+  return { dir, file: path.join(dir, 'project.tactiq') };
+});
+ipcMain.handle('write-project', async (e, { file, text, backup }) => {
+  const dir = path.dirname(file);
+  PROJECT_DIRS.forEach(d => { try { fs.mkdirSync(path.join(dir, d), { recursive: true }); } catch (err) { /* ignore */ } });
+  if (backup && fs.existsSync(file)) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const bdir = path.join(dir, 'backups');
+    fs.copyFileSync(file, path.join(bdir, 'project-' + stamp + '.tactiq'));
+    const old = fs.readdirSync(bdir).filter(f => f.endsWith('.tactiq')).sort();
+    old.slice(0, Math.max(0, old.length - 20)).forEach(f => { try { fs.unlinkSync(path.join(bdir, f)); } catch (err) { /* ignore */ } });
+  }
+  const tmp = file + '.tmp';
+  await fs.promises.writeFile(tmp, text, 'utf8');
+  await fs.promises.rename(tmp, file);   // atomic: a crash never leaves a half-written project
+  return file;
+});
+ipcMain.handle('read-project', async (e, file) => {
+  try { return { path: file, text: await fs.promises.readFile(file, 'utf8') }; } catch (err) { return { path: file, error: String(err.message || err) }; }
+});
+ipcMain.handle('list-backups', async (e, file) => {
+  const bdir = path.join(path.dirname(file), 'backups');
+  try { return fs.readdirSync(bdir).filter(f => f.endsWith('.tactiq')).sort().reverse().map(f => path.join(bdir, f)); } catch (err) { return []; }
+});
+ipcMain.handle('path-exists', async (e, p) => { try { return !!p && fs.existsSync(p); } catch (err) { return false; } });
+ipcMain.handle('write-binary', async (e, { file, base64 }) => {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  await fs.promises.writeFile(file, Buffer.from(base64, 'base64'));
+  return file;
+});
+ipcMain.handle('write-text', async (e, { file, text }) => {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  await fs.promises.writeFile(file, text, 'utf8');
+  return file;
+});
+ipcMain.handle('copy-into-project', async (e, { src, projectDir }) => {
+  const dest = path.join(projectDir, 'videos', path.basename(src));
+  if (path.resolve(src) !== path.resolve(dest)) await fs.promises.copyFile(src, dest);
+  allowedMedia.add(path.resolve(dest));
+  return dest;
+});
+ipcMain.handle('probe-video', async (e, p) => {
+  const ff = ffmpegPath();
+  if (!ff || !p) return null;
+  const r = await exporter.probe(ff, p);
+  const st = fs.statSync(p);
+  const rot = /rotate\s*:\s*(-?\d+)/.exec(r.text) || /rotation of (-?[\d.]+)/.exec(r.text);
+  return { duration: r.duration, width: r.width, height: r.height, fps: r.fps, vcodec: r.vcodec, acodec: r.acodec,
+    rotation: rot ? Number(rot[1]) : 0, size: st.size, ok: !!r.vcodec, warning: /Invalid data|corrupt|moov atom not found|error while decoding/i.test(r.text) ? 'The file may be damaged or incomplete.' : '' };
+});
+ipcMain.handle('system-info', async () => {
+  const os = require('os');
+  return { platform: process.platform, release: os.release(), arch: process.arch, ramGB: Math.round(os.totalmem() / 1073741824 * 10) / 10,
+    freeRamGB: Math.round(os.freemem() / 1073741824 * 10) / 10, cpu: (os.cpus()[0] || {}).model || '', cores: os.cpus().length };
+});

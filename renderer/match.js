@@ -57,6 +57,7 @@ function matchDialogHtml() {
   const squadRows = list => list.map(p => `<tr><td>${esc(playerLabel(p))}</td><td class="muted">${esc(p.name)}</td><td>${sel(p)}</td><td class="muted">${mins[p.id] != null ? mins[p.id] + "'" : ''}</td></tr>`).join('');
   const subs = match.subs.slice().sort((a, b) => a.t - b.t).map(s => `<tr><td><span class="tlink" data-mseek="${s.t}">${esc(matchClock(s.t) || fmtTime(s.t))}</span></td><td>⬇ ${esc(playerLabel(VOC.playersById[s.offId]) || '—')}</td><td>⬆ ${esc(playerLabel(VOC.playersById[s.onId]) || '—')}</td><td><button class="small danger" data-delsub="${s.id}">✕</button></td></tr>`).join('');
   return `
+  <div class="toolbar"><button class="small" id="mProj">📁 Project details (teams, colours, pitch size…)</button></div>
   <h4 style="margin-top:0">Match info</h4>
   <div class="formgrid">
     <label>Date</label><input type="date" data-info="date" value="${esc(i.date)}">
@@ -79,6 +80,9 @@ function matchDialogHtml() {
   <div class="toolbar"><span class="small">Or shift everything by</span><input type="number" id="syncSec" value="0" step="0.5" style="width:90px"><span class="small">seconds</span><button class="small" id="syncShift">Shift</button></div>`;
 }
 function shiftAll(d) {
+  checkpoint();
+  if (typeof TR !== 'undefined') { TR.tracks.forEach(tk => tk.points.forEach(p => p.t = Math.max(0, Math.round((p.t + d) * 1000) / 1000))); TR.cals.forEach(c => c.t = Math.max(0, c.t + d)); }
+  if (typeof clips !== 'undefined') clips.forEach(c => { c.start = Math.max(0, c.start + d); c.end = Math.max(0.2, c.end + d); });
   events.forEach(e => {
     e.t = Math.max(0, Math.round((e.t + d) * 100) / 100); e.start = Math.max(0, Math.round((e.start + d) * 100) / 100); e.end = Math.max(0.2, Math.round((e.end + d) * 100) / 100);
     (e.drawings || []).forEach(x => x.t = Math.max(0, Math.round((x.t + d) * 100) / 100));
@@ -90,15 +94,16 @@ function shiftAll(d) {
 function openMatchDialog() {
   const rerender = body => { body.innerHTML = matchDialogHtml(); bind(body); };
   const bind = body => {
-    body.querySelectorAll('[data-info]').forEach(el => el.onchange = () => { match.info[el.dataset.info] = el.value; autosave(); });
-    body.querySelectorAll('[data-squad]').forEach(el => el.onchange = () => { if (el.value) match.squad[el.dataset.squad] = el.value; else delete match.squad[el.dataset.squad]; autosave(); renderAll(); rerender(body); });
-    body.querySelectorAll('[data-setk]').forEach(el => el.onclick = () => { match.kickoffs[el.dataset.setk] = Math.round(curT() * 100) / 100; autosave(); renderAll(); rerender(body); });
-    body.querySelectorAll('[data-sete]').forEach(el => el.onclick = () => { match.ends[el.dataset.sete] = Math.round(curT() * 100) / 100; autosave(); renderAll(); rerender(body); });
-    body.querySelectorAll('[data-clrp]').forEach(el => el.onclick = () => { delete match.kickoffs[el.dataset.clrp]; delete match.ends[el.dataset.clrp]; autosave(); renderAll(); rerender(body); });
-    body.querySelectorAll('[data-delsub]').forEach(el => el.onclick = () => { match.subs = match.subs.filter(s => s.id !== el.dataset.delsub); autosave(); renderAll(); rerender(body); });
+    const mp = body.querySelector('#mProj'); if (mp) mp.onclick = () => openProjectForm('edit');
+    body.querySelectorAll('[data-info]').forEach(el => el.onchange = () => { checkpoint(); match.info[el.dataset.info] = el.value; autosave(); });
+    body.querySelectorAll('[data-squad]').forEach(el => el.onchange = () => { checkpoint(); if (el.value) match.squad[el.dataset.squad] = el.value; else delete match.squad[el.dataset.squad]; autosave(); renderAll(); rerender(body); });
+    body.querySelectorAll('[data-setk]').forEach(el => el.onclick = () => { checkpoint(); match.kickoffs[el.dataset.setk] = Math.round(curT() * 100) / 100; autosave(); renderAll(); rerender(body); });
+    body.querySelectorAll('[data-sete]').forEach(el => el.onclick = () => { checkpoint(); match.ends[el.dataset.sete] = Math.round(curT() * 100) / 100; autosave(); renderAll(); rerender(body); });
+    body.querySelectorAll('[data-clrp]').forEach(el => el.onclick = () => { checkpoint(); delete match.kickoffs[el.dataset.clrp]; delete match.ends[el.dataset.clrp]; autosave(); renderAll(); rerender(body); });
+    body.querySelectorAll('[data-delsub]').forEach(el => el.onclick = () => { checkpoint(); match.subs = match.subs.filter(s => s.id !== el.dataset.delsub); autosave(); renderAll(); rerender(body); });
     body.querySelectorAll('[data-mseek]').forEach(el => el.onclick = () => { if (hasVideo()) video.currentTime = Number(el.dataset.mseek); });
     const all = body.querySelector('#sqAllStart');
-    if (all) all.onclick = () => { config.players.filter(p => (p.team || 'Home') === 'Home').forEach((p, i) => match.squad[p.id] = i < 11 ? 'start' : 'sub'); autosave(); renderAll(); rerender(body); };
+    if (all) all.onclick = () => { checkpoint(); config.players.filter(p => (p.team || 'Home') === 'Home').forEach((p, i) => match.squad[p.id] = i < 11 ? 'start' : 'sub'); autosave(); renderAll(); rerender(body); };
     body.querySelector('#syncAlign').onclick = () => {
       const ev = events.find(e => e.id === Number(body.querySelector('#syncEv').value));
       if (!ev) return;
@@ -125,6 +130,7 @@ function openSubDialog() {
     <div class="formgrid"><label>Player OFF ⬇</label><select id="subOff">${opts(offList)}</select><label>Player ON ⬆</label><select id="subOn">${opts(onList)}</select></div>`,
   [{ label: 'Cancel' }, { label: 'Save substitution', primary: true, value: 'ok', onClick: () => { off = $('#subOff').value; onId = $('#subOn').value; if (!off && !onId) { alert('Choose at least one player.'); return false; } } }]).then(r => {
     if (r !== 'ok') return;
+    checkpoint();
     match.subs.push({ id: uid(), t: Math.round(t * 100) / 100, offId: off, onId });
     if (onId && !match.squad[onId]) match.squad[onId] = 'sub';
     autosave(); renderAll();

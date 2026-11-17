@@ -4,7 +4,7 @@
    Nacsport XML import, code-window templates.
    ===================================================================== */
 const baseName = n => (n ? n.replace(/\.[^.]+$/, '') : 'match');
-const teamName = key => key === 'Away' ? config.general.awayName : key === 'Home' ? config.general.homeName : (key || '');
+const teamName = key => key === 'Away' ? config.general.awayName : key === 'Home' ? config.general.homeName : key === 'Neutral' ? 'Neutral' : (key || '');
 function labelGroupNames() {
   const names = config.labelGroups.map(g => g.name);
   events.forEach(e => Object.keys(e.labels || {}).forEach(k => { if (!names.includes(k)) names.push(k); }));
@@ -18,7 +18,7 @@ function eventHead() {
 function eventRow(e) {
   const n = v => v == null ? '' : v;
   return [e.id, evPeriod(e), matchClock(e.t), e.code, e.type === 'duration' ? 'Phase' : 'Event', fmtTime(e.t), e.t, e.start, e.end, Math.round((e.end - e.start) * 100) / 100,
-    e.playerId ? teamName(e.team) : '', numOrBlank(e.num), e.name, e.pos, e.outcome, e.success === 1 ? 1 : e.success === 0 ? 0 : '',
+    teamName(e.team), numOrBlank(e.num), e.name, e.pos, e.outcome, e.success === 1 ? 1 : e.success === 0 ? 0 : '',
     n(e.x), n(e.y), n(e.x2), n(e.y2), ...labelGroupNames().map(g => (e.labels || {})[g] || ''), e.note || '', (e.drawings || []).length || '', e.source, e.heard];
 }
 function requireEvents() { if (!events.length) { toast('No tags to export yet', 'bad'); return false; } return true; }
@@ -50,7 +50,7 @@ function buildXml() {
   sortedEvents().forEach(e => {
     const code = codeOf(e);
     if (!rows.has(code)) { const c = VOC.codesById[e.codeId]; rows.set(code, mode === 'code' && c ? c.color : PALETTE[rows.size % PALETTE.length]); }
-    const labels = [['Player', e.playerId ? playerLabel(e) : ''], ['Player name', e.name], ['Team', e.playerId ? teamName(e.team) : ''], ['Position', e.pos],
+    const labels = [['Player', e.playerId ? playerLabel(e) : ''], ['Player name', e.name], ['Team', teamName(e.team)], ['Position', e.pos],
       ['Code', mode !== 'code' ? e.code : ''], ['Outcome', e.outcome], ['Period', evPeriod(e)], ['Match time', matchClock(e.t)], ['Note', e.note], ...Object.entries(e.labels || {})];
     out += '    <instance>\n' +
       `      <ID>${e.id}</ID>\n      <start>${e.start.toFixed(2)}</start>\n      <end>${e.end.toFixed(2)}</end>\n      <code>${xmlEsc(code)}</code>\n` +
@@ -61,6 +61,7 @@ function buildXml() {
   rows.forEach((color, code) => { const [r, g, b] = hexToRGB16(color); out += `    <row>\n      <code>${xmlEsc(code)}</code>\n      <R>${r}</R>\n      <G>${g}</G>\n      <B>${b}</B>\n    </row>\n`; });
   return out + '  </ROWS>\n</file>\n';
 }
+$('#btnJson').onclick = () => { saveText(matchBase() + ' data.json', JSON.stringify(projectObject(), null, 1), 'json', 'JSON'); };
 $('#btnXml').onclick = () => { if (requireEvents()) saveText(matchBase() + ' timeline.xml', buildXml(), 'xml', 'XML timeline'); };
 
 /* ---- Excel (.xlsx) writer, no external libraries ---- */
@@ -170,7 +171,14 @@ $('#btnXlsx').onclick = async () => {
 };
 
 /* ---------------------------------------------------------------- PROJECTS */
-function projectObject() { return { app: 'VoiceTag', version: 3, savedAt: new Date().toISOString(), video: { path: videoInfo.path, name: videoInfo.name, size: videoInfo.size }, match, config, events, nextId }; }
+function projectObject() {
+  return { app: 'VoiceTag', product: 'TACTIQ ANALYST', version: 4, appVersion: APP_VERSION, savedAt: new Date().toISOString(),
+    project: { info: typeof project !== 'undefined' ? project.info : {} },
+    video: { path: videoInfo.path, name: videoInfo.name, size: videoInfo.size, meta: videoMeta },
+    match, config, events, nextId, curTeam,
+    tracking: typeof TR !== 'undefined' ? { tracks: TR.tracks, cals: TR.cals, settings: TR.settings } : null,
+    clips: typeof clips !== 'undefined' ? clips : [] };
+}
 $('#btnSaveProj').onclick = async () => {
   const proj = projectObject(), text = JSON.stringify(proj, null, 1);
   const name = (match.info.date ? match.info.date + ' ' : '') + (match.info.opponent ? 'vs ' + match.info.opponent : matchBase());
@@ -192,11 +200,14 @@ async function openProjectData(p, path, askConfig = true) {
   events = evs; nextId = p.nextId || (Math.max(0, ...evs.map(x => x.id)) + 1); undoStack = []; open = {}; match = m; locAsk = null;
   target = { kind: null, id: null, seq: 0 };
   live.on = false; live.running = false;
+  curTeam = p.curTeam || 'Home';
+  if (typeof TR !== 'undefined') { TR.tracks = (p.tracking && p.tracking.tracks) || []; TR.cals = (p.tracking && p.tracking.cals) || []; if (p.tracking && p.tracking.settings) Object.assign(TR.settings, p.tracking.settings); TR.sel = null; }
+  if (typeof clips !== 'undefined') clips = p.clips || [];
   let loaded = false;
   if (p.video && p.video.path && api.isDesktop) {
-    const r = await api.registerMedia(p.video.path);
+    let r = await api.registerMedia(p.video.path);
+    if (!r && confirm('The video for this project was not found at:\n' + p.video.path + '\n\nWas it moved? Click OK to find it now (all tags stay linked).')) r = await api.openVideo();
     if (r) { await loadVideo(r, true); loaded = true; sessionKey = 'vt_session_' + r.path + '_' + r.size; }
-    else alert('The video for this project was not found at:\n' + p.video.path + '\n\nOpen it with "Open video" – choose "keep tags" is automatic for projects.');
   }
   if (!loaded) { videoInfo = Object.assign({ path: '', name: '', size: 0, playPath: '' }, p.video || {}); sessionKey = 'vt_session_project_' + (path || uid()); }
   renderAll(); autosave();

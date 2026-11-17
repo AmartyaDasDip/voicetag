@@ -5,10 +5,10 @@
    ===================================================================== */
 const rated = list => list.filter(e => e.success === 0 || e.success === 1);
 const pctOf = list => { const r = rated(list); return r.length ? Math.round(r.filter(e => e.success === 1).length / r.length * 1000) / 10 : null; };
-const teamOf = e => e.team || (e.playerId ? 'Home' : '');
-function teamFilter(list, team) { return team ? list.filter(e => teamOf(e) === team || (!e.playerId && team === 'Home')) : list; }
+const teamOf = e => e.team || 'Home';
+function teamFilter(list, team) { return team ? list.filter(e => teamOf(e) === team) : list; }
 function kpiValue(k, evs) {
-  const list = evs.filter(e => e.codeId === k.codeId && (!k.team || teamOf(e) === k.team || (!e.playerId && k.team === 'Home')));
+  const list = evs.filter(e => e.codeId === k.codeId && (!k.team || teamOf(e) === k.team));
   if (k.metric === 'pct') return pctOf(list);
   return list.length;
 }
@@ -87,6 +87,17 @@ function pitchMapSVG(list, mode, opts = {}) {
 }
 function renderMaps() {
   const team = $('#mapTeam').value, pl = $('#mapPlayer').value, cd = $('#mapCode').value, per = $('#mapPeriod').value, mode = $('#mapMode').value;
+  if (mode === 'trackheat' || mode === 'avgpos') {
+    const s = typeof trackingSamples === 'function' ? trackingSamples({ team, playerId: pl, period: per }) : [];
+    if (mode === 'trackheat') $('#mapBox').innerHTML = pitchMapSVG(s, 'heat');
+    else {
+      const by = new Map(); s.forEach(q => { if (!by.has(q.tk.id)) by.set(q.tk.id, { tk: q.tk, xs: [], ys: [] }); const b = by.get(q.tk.id); b.xs.push(q.x); b.ys.push(q.y); });
+      const dots = [...by.values()].filter(b => b.tk.kind !== 'ball').map(b => { const x = avg(b.xs), y = avg(b.ys); return `<circle cx="${PX(x)}" cy="${PY(y)}" r="2" fill="${esc(trackColor(b.tk))}" stroke="#000" stroke-width=".3"><title>${esc(trackLabel(b.tk))} – ${b.xs.length} samples</title></circle><text x="${PX(x)}" y="${(Number(PY(y)) + 0.8).toFixed(2)}" font-size="2.2" text-anchor="middle" fill="#fff" font-weight="700">${esc(trackShort(b.tk))}</text>`; }).join('');
+      $('#mapBox').innerHTML = `<svg class="pitchsvg" viewBox="0 0 105 68">${pitchLines()}${dots}</svg>`;
+    }
+    $('#mapInfo').innerHTML = s.length ? `${s.length} tracked positions (every 0.5 s, only where the player was visible and the pitch was calibrated). Estimates from video, not GPS.` : 'No calibrated tracking data for this filter yet (Track tab: add tracks, click positions, calibrate the pitch).';
+    return;
+  }
   const list = teamFilter(events, team).filter(e => e.x != null && (!pl || e.playerId === pl) && (!cd || e.codeId === cd) && (!per || evPeriod(e) === per));
   $('#mapBox').innerHTML = pitchMapSVG(list, mode, { clickable: true });
   const noLoc = events.filter(e => e.x == null && e.type !== 'duration').length;

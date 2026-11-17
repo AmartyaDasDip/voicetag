@@ -2,7 +2,7 @@
 /* =====================================================================
    VoiceTag app: video, tagging, voice, code window, events, timeline
    ===================================================================== */
-const HOOKS = { render: [], afterTag: [], tick: [] };
+const HOOKS = { render: [], afterTag: [], tick: [], key: [] };
 
 /* ---------------------------------------------------------------- STATE */
 let events = [];
@@ -16,6 +16,32 @@ let sessionKey = 'vt_session_default';
 let videoInfo = { path: '', name: '', size: 0, playPath: '' };
 let lastNewId = null;
 let lastPlayerId = '';
+let curTeam = 'Home';           // team for new tags without a player (Home / Away / Neutral)
+let videoMeta = null;           // resolution, fps, codecs of the open video
+const frameDur = () => 1 / ((videoMeta && videoMeta.fps) || 25);
+
+/* ---------------------------------------------------------------- UNDO / REDO (whole-session snapshots) */
+const History = {
+  past: [], future: [], max: 60,
+  snap() {
+    return JSON.stringify({ events, nextId, match, open, curTeam,
+      tracks: typeof TR !== 'undefined' ? TR.tracks : [], cals: typeof TR !== 'undefined' ? TR.cals : [], clips: typeof clips !== 'undefined' ? clips : [] });
+  },
+  checkpoint() { this.past.push(this.snap()); if (this.past.length > this.max) this.past.shift(); this.future = []; markDirty(); },
+  restore(str) {
+    const o = JSON.parse(str);
+    events = o.events; nextId = o.nextId; match = o.match; open = o.open || {}; curTeam = o.curTeam || curTeam;
+    if (typeof TR !== 'undefined') { TR.tracks = o.tracks || []; TR.cals = o.cals || []; }
+    if (typeof clips !== 'undefined') clips = o.clips || [];
+    locAsk = null; renderAll(); autosave(); markDirty();
+  },
+  undo() { if (!this.past.length) { toast('Nothing to undo', 'info'); return; } this.future.push(this.snap()); this.restore(this.past.pop()); toast('↶ Undo', 'info', 900); },
+  redo() { if (!this.future.length) { toast('Nothing to redo', 'info'); return; } this.past.push(this.snap()); this.restore(this.future.pop()); toast('↷ Redo', 'info', 900); },
+  clear() { this.past = []; this.future = []; }
+};
+const checkpoint = () => History.checkpoint();
+let dirty = false;
+function markDirty() { dirty = true; }
 let locAsk = null;            // {id, stage:'start'|'end'} while waiting for a pitch click
 function EMPTY_MATCH() { return { info: { date: '', opponent: '', competition: '', venue: 'Home', notes: '' }, kickoffs: {}, ends: {}, squad: {}, subs: [] }; }
 let match = EMPTY_MATCH();
@@ -112,17 +138,23 @@ function setVideo(info, playPath, keepTags) {
   autosaveNow();
   video.src = info.url || api.mediaUrl(playPath || info.path);
   videoInfo = { path: info.path || '', name: info.name, size: info.size, playPath: playPath || '' };
+  videoMeta = null;
+  if (api.probeVideo && info.path) api.probeVideo(info.path).then(m => { videoMeta = m; if (m && m.warning) toast('⚠ ' + m.warning, 'bad', 6000); updateTime(); }).catch(() => {});
   document.title = info.name + ' – VoiceTag';
   $('#drop').classList.add('hidden');
   if (keepTags) { renderAll(); return; }   // live session or project: keep the tags already loaded
   sessionKey = 'vt_session_' + (info.path || info.name) + '_' + info.size;
-  events = []; undoStack = []; nextId = 1; open = {}; target = { kind: null, id: null, seq: 0 }; match = EMPTY_MATCH();
+  events = []; undoStack = []; nextId = 1; open = {}; target = { kind: null, id: null, seq: 0 }; match = EMPTY_MATCH(); History.clear();
+  if (typeof TR !== 'undefined') { TR.tracks = []; TR.cals = []; }
+  if (typeof clips !== 'undefined') clips = [];
   try {
     const saved = JSON.parse(localStorage.getItem(sessionKey) || 'null');
     if (saved && saved.events && saved.events.length &&
         confirm('Found ' + saved.events.length + ' saved tags for "' + info.name + '".\n\nOK = restore them\nCancel = start a fresh session')) {
       events = saved.events; nextId = saved.nextId || (Math.max(0, ...events.map(e => e.id)) + 1);
       if (saved.match) match = Object.assign(EMPTY_MATCH(), saved.match);
+      if (saved.tracks && typeof TR !== 'undefined') { TR.tracks = saved.tracks; TR.cals = saved.cals || []; }
+      if (saved.clips && typeof clips !== 'undefined') clips = saved.clips;
     }
   } catch (e) { /* ignore */ }
   renderAll();
@@ -181,6 +213,7 @@ $('#btnLive').onclick = () => {
 /* ---------------------------------------------------------------- MATCH CLOCK BUTTONS */
 $('#btnKickoff').onclick = () => {
   const p = $('#selPeriod').value, t = curT();
+  checkpoint();
   match.kickoffs[p] = Math.round(t * 100) / 100;
   toast(`Kick-off ${PERIOD_NAME[p]} half marked at ${fmtTime(t)}`, 'info');
   autosave(); renderAll();
@@ -188,6 +221,7 @@ $('#btnKickoff').onclick = () => {
 $('#btnEndPeriod').onclick = () => {
   const p = $('#selPeriod').value, t = curT();
   if (match.kickoffs[p] == null) { alert('Mark the kick-off of this period first.'); return; }
+  checkpoint();
   match.ends[p] = Math.round(t * 100) / 100;
   toast(`End of ${PERIOD_NAME[p]} marked (${matchClock(t)})`, 'info');
   const next = PERIODS[PERIODS.indexOf(p) + 1];
@@ -227,16 +261,17 @@ function setPlayer(ev, p) {
   Object.assign(ev, { playerId: p.id, team: p.team || 'Home', num: p.num, name: p.name || '', pos: p.pos || '' });
   lastPlayerId = p.id;
 }
-function clearPlayer(ev) { Object.assign(ev, { playerId: '', team: '', num: '', name: '', pos: '' }); }
+function clearPlayer(ev) { Object.assign(ev, { playerId: '', num: '', name: '', pos: '' }); }
 function setOutcome(ev, o) { ev.outcomeId = o ? o.id : ''; ev.outcome = o ? o.name : ''; ev.success = outcomeSuccess(o); }
 function setLabel(ev, group, label) { ev.labels = ev.labels || {}; ev.labels[group.name] = label.name; }
 function resolvePlayer(p) { return p === SAME_PLAYER ? (VOC.playersById[lastPlayerId] || null) : p; }
 function makeInstance(code, t, start, end, opts) {
+  if (!opts.noCheckpoint) checkpoint();
   const ev = {
     id: nextId++, codeId: code.id, code: code.name, type: code.type,
     t, start: Math.max(0, Math.round(start * 100) / 100), end: Math.round(end * 100) / 100,
     period: periodOf(t) || $('#selPeriod').value,
-    playerId: '', team: '', num: '', name: '', pos: '',
+    playerId: '', team: opts.team || curTeam, num: '', name: '', pos: '',
     outcomeId: '', outcome: '', success: null, labels: {}, note: '',
     source: opts.source || 'button', heard: opts.heard || ''
   };
@@ -262,7 +297,7 @@ function toggleDuration(code, t, opts = {}, mode = 'toggle') {
     delete open[code.id];
     const start = Math.min(running.t, t), end = Math.max(running.t, t);
     const ev = makeInstance(code, start, start - (Number(code.lead) || 0), end + (Number(code.lag) || 0), {
-      source: running.source, heard: running.heard,
+      source: running.source, heard: running.heard, team: running.team,
       player: opts.player || running.player, outcome: opts.outcome || running.outcome,
       labels: (running.labels || []).concat(opts.labels || [])
     });
@@ -272,8 +307,9 @@ function toggleDuration(code, t, opts = {}, mode = 'toggle') {
   }
   if (!running && mode === 'stop') return { action: 'not-running' };
   if (running && mode === 'start') return { action: 'already' };
+  checkpoint();
   seq++;
-  open[code.id] = { t, seq, player: resolvePlayer(opts.player) || null, outcome: opts.outcome || null, labels: opts.labels || [], source: opts.source || 'button', heard: opts.heard || '' };
+  open[code.id] = { t, seq, team: opts.team || curTeam, player: resolvePlayer(opts.player) || null, outcome: opts.outcome || null, labels: opts.labels || [], source: opts.source || 'button', heard: opts.heard || '' };
   target = { kind: 'open', id: code.id, seq };
   undoStack.push({ type: 'open', codeId: code.id });
   renderAll();
@@ -299,6 +335,7 @@ function selectEvent(id) { seq++; target = { kind: 'event', id, seq }; }
 function applyLabel(item, quiet) {
   const tg = currentTarget();
   if (!tg) { toast('Tag a code first – labels are added to the latest tag', 'bad'); return false; }
+  checkpoint();
   if (tg.kind === 'open') {
     const o = tg.ref;
     if (item.kind === 'player') o.player = item.v;
@@ -329,7 +366,9 @@ function targetText() {
   if (tg.kind === 'open') return tg.code.name + ' (running)';
   return fmtTime(tg.ref.t) + ' ' + eventText(tg.ref);
 }
-function undo() {
+function undo() { History.undo(); }
+function redo() { History.redo(); }
+function undoOld() {
   while (undoStack.length) {
     const u = undoStack.pop();
     if (u.type === 'open' && open[u.codeId]) { delete open[u.codeId]; renderAll(); toast('Cancelled running ' + (VOC.codesById[u.codeId] || {}).name, 'info'); return; }
@@ -343,7 +382,7 @@ function undo() {
 $('#btnUndo').onclick = undo;
 $('#btnClear').onclick = () => {
   if (!events.length) return;
-  if (confirm('Delete ALL ' + events.length + ' tags? (Tip: save a project first.)')) { events = []; undoStack = []; open = {}; locAsk = null; renderAll(); autosave(); }
+  if (confirm('Delete ALL ' + events.length + ' tags? (You can undo this with Ctrl+Z.)')) { checkpoint(); events = []; open = {}; locAsk = null; renderAll(); autosave(); }
 };
 
 /* ---------------------------------------------------------------- COMMANDS (voice + typed) */
@@ -495,8 +534,8 @@ function setMicUI(state) {
   const ptt = config.general.ptt;
   b.classList.toggle('on', state === 'on' && (!ptt || Voice.held));
   b.classList.toggle('loading', state === 'loading');
-  b.innerHTML = state === 'on' ? (ptt ? (Voice.held ? '🔴 Listening…' : '🎤 Voice: hold ' + pttKeyName()) : '🔴 Voice: listening') + ' <kbd>M</kbd>'
-    : state === 'loading' ? '⏳ Voice: starting…' : '🎤 Voice: off <kbd>M</kbd>';
+  b.innerHTML = state === 'on' ? (ptt ? (Voice.held ? '🔴 Listening…' : '🎤 Voice: hold ' + pttKeyName()) : '🔴 Voice: listening') + ' <kbd>F9</kbd>'
+    : state === 'loading' ? '⏳ Voice: starting…' : '🎤 Voice: off <kbd>F9</kbd>';
   $('#micState').textContent = state === 'on' ? (ptt ? (Voice.held ? 'listening (push-to-talk)' : 'push-to-talk ready') : 'voice on (offline)') : state === 'loading' ? 'starting…' : 'voice off';
 }
 const PTT_KEYS = { ControlRight: 'Right Ctrl', ShiftRight: 'Right Shift', AltRight: 'Right Alt', Backquote: '` key', Insert: 'Insert', F2: 'F2', F4: 'F4', Pause: 'Pause' };
@@ -563,6 +602,7 @@ $('#pitchIn').addEventListener('click', e => {
   if (locAsk && events.some(x => x.id === locAsk.id)) { ev = events.find(x => x.id === locAsk.id); stage = e.shiftKey ? 'end' : locAsk.stage; }
   else { const tg = currentTarget(); if (tg && tg.kind === 'event') ev = tg.ref; }
   if (!ev) { toast('Tag something first, then click its location', 'bad'); return; }
+  checkpoint();
   const rx = Math.round(x * 10) / 10, ry = Math.round(y * 10) / 10;
   if (stage === 'end') { ev.x2 = rx; ev.y2 = ry; if (ev.x == null) { ev.x = rx; ev.y = ry; } locAsk = null; }
   else {
@@ -584,10 +624,14 @@ function renderCodeWindow() {
   }
   const hk = k => k ? `<span class="hk">${esc(String(k).toUpperCase())}</span>` : '';
   const codeBtn = c => `<button class="cbtn ${open[c.id] ? 'running' : ''}" style="--c:${esc(c.color)}" data-code="${esc(c.id)}">${esc(c.name)}${hk(c.hotkey)}<span class="ty" data-timer="${esc(c.id)}">${c.type === 'duration' ? (open[c.id] ? '● ' + fmtDur(Math.max(0, curT() - open[c.id].t)) : '⏱ start / stop') : ''}</span></button>`;
-  const inst = config.codes.filter(c => c.type !== 'duration'), dur = config.codes.filter(c => c.type === 'duration');
-  let html = '';
-  if (inst.length) html += `<div class="cwsec"><h4>Events</h4><div class="cwgrid">${inst.map(codeBtn).join('')}</div></div>`;
-  if (dur.length) html += `<div class="cwsec"><h4>Phases (press to start, press again to stop)</h4><div class="cwgrid">${dur.map(codeBtn).join('')}</div></div>`;
+  const teamBtn = t => `<button class="lbtn ${curTeam === t ? 'on' : ''}" data-team="${t}">${esc(teamName(t))}</button>`;
+  let html = `<div class="cwsec"><h4>Team for new tags</h4><div class="lgrid">${TEAMS.map(teamBtn).join('')}<span class="muted small" style="align-self:center">&nbsp;(a player’s own team always wins)</span></div></div>`;
+  const cats = [];
+  config.codes.forEach(c => { const k = c.category || (c.type === 'duration' ? 'Phases' : 'Events'); if (!cats.includes(k)) cats.push(k); });
+  cats.forEach(k => {
+    const list = config.codes.filter(c => (c.category || (c.type === 'duration' ? 'Phases' : 'Events')) === k);
+    html += `<div class="cwsec"><h4>${esc(k)}</h4><div class="cwgrid">${list.map(codeBtn).join('')}</div></div>`;
+  });
   const lbtn = (kind, id, text, key, on) => `<button class="lbtn ${on ? 'on' : ''}" data-lkind="${kind}" data-lid="${esc(id)}">${esc(text)}${key ? `<span class="hk">${esc(String(key).toUpperCase())}</span>` : ''}</button>`;
   const onPitch = typeof playersOnPitch === 'function' ? playersOnPitch(curT()) : null;
   const home = config.players.filter(p => p.team !== 'Away' && match.squad[p.id] !== 'out'), away = config.players.filter(p => p.team === 'Away' && match.squad[p.id] !== 'out');
@@ -622,6 +666,14 @@ function labelItemFromIds(kind, id) {
 $('#codeWindow').addEventListener('click', e => {
   const cb = e.target.closest('[data-code]');
   if (cb) { const c = VOC.codesById[cb.dataset.code]; if (c) pressCode(c, 'button'); return; }
+  const tb = e.target.closest('[data-team]');
+  if (tb) {
+    curTeam = tb.dataset.team;
+    const tg = currentTarget();
+    if (tg && tg.kind === 'open' && !tg.ref.player) tg.ref.team = curTeam;   // a running phase takes the team chosen while it runs
+    toast('New tags: ' + teamName(curTeam) + ' (change an existing tag with ✎ in Events)', 'info', 1800);
+    renderAll(); return;
+  }
   const lb = e.target.closest('[data-lkind]');
   if (lb) { const it = labelItemFromIds(lb.dataset.lkind, lb.dataset.lid); if (it) applyLabel(it); }
 });
@@ -671,7 +723,7 @@ function renderEvents() {
       <td><select data-f="player">${pSel}</select></td>
       <td><select data-f="outcome" class="${cls}">${oOpts}</select></td>
       <td class="evicons"><span class="${e.x != null ? '' : 'off'}" data-loc="${e.id}" title="${e.x != null ? 'Location set – click to clear' : 'No location'}">📍</span><span class="${e.note ? '' : 'off'}" data-note="${e.id}" title="${esc(e.note || 'Add a note')}">📝</span><span class="${nd ? '' : 'off'}" data-dr="${e.id}" title="${nd ? nd + ' drawing(s) – click to remove' : 'No drawings'}">✏${nd ? nd : ''}</span></td>
-      <td><button class="small danger" data-del="${e.id}" title="Delete">✕</button></td></tr>`;
+      <td style="white-space:nowrap"><button class="small" data-edit="${e.id}" title="Edit all fields">✎</button><button class="small danger" data-del="${e.id}" title="Delete">✕</button></td></tr>`;
   }).join('');
   list.forEach(e => {
     const tr = tb.querySelector(`tr[data-id="${e.id}"]`);
@@ -685,18 +737,20 @@ $('#evTable').addEventListener('click', async e => {
   const s = e.target.closest('[data-seek]');
   if (s) { if (hasVideo()) video.currentTime = Math.max(0, Number(s.dataset.seek)); }
   const d = e.target.closest('[data-del]');
-  if (d) { const id = Number(d.dataset.del); events = events.filter(x => x.id !== id); renderAll(); autosave(); return; }
+  if (d) { checkpoint(); const id = Number(d.dataset.del); events = events.filter(x => x.id !== id); renderAll(); autosave(); return; }
+  const ed = e.target.closest('[data-edit]');
+  if (ed) { openEventEditor(Number(ed.dataset.edit)); return; }
   const n = e.target.closest('[data-note]');
   if (n) {
     const ev = events.find(x => x.id === Number(n.dataset.note)); if (!ev) return;
     const v = await Dlg.ask('Note for ' + eventText(ev), 'Coaching point / comment. It appears in reports and on exported title cards.', ev.note || '', true);
-    if (v !== null) { ev.note = v.trim(); autosave(); renderAll(); }
+    if (v !== null) { checkpoint(); ev.note = v.trim(); autosave(); renderAll(); }
     return;
   }
   const lc = e.target.closest('[data-loc]');
-  if (lc) { const ev = events.find(x => x.id === Number(lc.dataset.loc)); if (ev && ev.x != null && confirm('Clear the location of this tag?')) { delete ev.x; delete ev.y; delete ev.x2; delete ev.y2; autosave(); renderAll(); } else if (ev) { selectEvent(ev.id); locAsk = { id: ev.id, stage: 'start' }; renderAll(); $$('#rightTabs button')[0].click(); } return; }
+  if (lc) { const ev = events.find(x => x.id === Number(lc.dataset.loc)); if (ev && ev.x != null && confirm('Clear the location of this tag?')) { checkpoint(); delete ev.x; delete ev.y; delete ev.x2; delete ev.y2; autosave(); renderAll(); } else if (ev) { selectEvent(ev.id); locAsk = { id: ev.id, stage: 'start' }; renderAll(); $$('#rightTabs button')[0].click(); } return; }
   const dr = e.target.closest('[data-dr]');
-  if (dr) { const ev = events.find(x => x.id === Number(dr.dataset.dr)); if (ev && (ev.drawings || []).length && confirm('Remove the drawings from this tag?')) { ev.drawings = []; autosave(); renderAll(); } return; }
+  if (dr) { const ev = events.find(x => x.id === Number(dr.dataset.dr)); if (ev && (ev.drawings || []).length && confirm('Remove the drawings from this tag?')) { checkpoint(); ev.drawings = []; autosave(); renderAll(); } return; }
   const tr = e.target.closest('tr[data-id]');
   if (tr && !e.target.closest('select')) { selectEvent(Number(tr.dataset.id)); renderEvents(); renderCodeWindow(); renderTimeline(); }
 });
@@ -704,6 +758,7 @@ $('#evTable').addEventListener('change', e => {
   const tr = e.target.closest('tr[data-id]'); if (!tr) return;
   const ev = events.find(x => x.id === Number(tr.dataset.id)); if (!ev) return;
   const f = e.target.dataset.f, v = e.target.value;
+  checkpoint();
   if (f === 'player') { if (!v) clearPlayer(ev); else setPlayer(ev, VOC.playersById[v]); }
   if (f === 'outcome') setOutcome(ev, VOC.outcomesById[v] || null);
   if (f === 'code') {
@@ -731,8 +786,9 @@ function renderTimeline() {
   const rows = config.codes.filter(c => events.some(e => e.codeId === c.id) || open[c.id]);
   const unknown = [...new Set(events.filter(e => !VOC.codesById[e.codeId]).map(e => e.code))];
   $('#tlInner').style.width = (TL_NAME + D * pps + 4) + 'px';
-  $('#tlHead').style.display = (rows.length || unknown.length) ? '' : 'none';
-  if (!rows.length && !unknown.length) { $('#tlRows').innerHTML = '<div class="tlempty">Your tags will appear here, one row per code. Drag a selected bar’s edges to change its start / end.</div>'; updateTime(); return; }
+  const anyRows = rows.length || unknown.length || (typeof clips !== 'undefined' && clips.length);
+  $('#tlHead').style.display = anyRows ? '' : 'none';
+  if (!anyRows) { $('#tlRows').innerHTML = '<div class="tlempty">Your tags will appear here, one row per code. Drag a selected bar’s edges to change its start / end.</div>'; updateTime(); return; }
   const selId = target.kind === 'event' ? target.id : null;
   const bar = e => `<div class="bar ${e.id === selId ? 'sel' : ''}" data-bar="${e.id}" style="left:${(e.start * pps).toFixed(1)}px;width:${Math.max(3, (e.end - e.start) * pps).toFixed(1)}px;background:var(--c)" title="${fmtTime(e.t)} ${esc(eventText(e))}"></div>`;
   let html = rows.map(c => {
@@ -741,12 +797,17 @@ function renderTimeline() {
     return `<div class="tlrow" style="--c:${esc(c.color)}"><div class="nm">${esc(c.name)}</div><div class="tr">${b}</div></div>`;
   }).join('');
   html += unknown.map(n => `<div class="tlrow" style="--c:#888"><div class="nm">${esc(n)}</div><div class="tr">${events.filter(e => e.code === n && !VOC.codesById[e.codeId]).map(bar).join('')}</div></div>`).join('');
+  if (typeof clips !== 'undefined' && clips.length) html += `<div class="tlrow" style="--c:#ffffff"><div class="nm">✂ Clips</div><div class="tr">${clips.map(c => `<div class="bar" style="left:${(c.start * pps).toFixed(1)}px;width:${Math.max(3, (c.end - c.start) * pps).toFixed(1)}px;background:#cfd8e3;opacity:.7" title="${esc(c.name)}"></div>`).join('')}</div></div>`;
+  const lines = [];
+  PERIODS.forEach(p => { if (match.kickoffs[p] != null) lines.push([match.kickoffs[p], '#2ecc71', PERIOD_NAME[p] + ' kick-off']); if (match.ends[p] != null) lines.push([match.ends[p], '#ff5a5f', PERIOD_NAME[p] + ' end']); });
+  if (typeof clipIO !== 'undefined') { if (clipIO.in != null) lines.push([clipIO.in, '#ffd23b', 'Clip IN']); if (clipIO.out != null) lines.push([clipIO.out, '#ffd23b', 'Clip OUT']); }
+  html += lines.map(([t, c, n]) => `<div class="tlmark" style="left:${(TL_NAME + t * pps).toFixed(1)}px;background:${c}" title="${esc(n)} ${fmtTime(t)}"></div>`).join('');
   $('#tlRows').innerHTML = html;
   updateTime();
 }
 function updateTime() {
   const t = curT();
-  $('#timeDisp').textContent = fmtTime(t) + ' / ' + (hasVideo() ? fmtTime(video.duration || 0) : live.on ? 'LIVE' : '00:00');
+  $('#timeDisp').textContent = fmtTime(t) + ' / ' + (hasVideo() ? fmtTime(video.duration || 0) : live.on ? 'LIVE' : '00:00') + (hasVideo() ? '  ·  f' + Math.round(t / frameDur()) : '');
   const mc = matchClock(t);
   $('#matchDisp').textContent = mc ? `Match ${mc} (${PERIOD_NAME[periodOf(t)]})` : 'Match —';
   $('#matchDisp').classList.toggle('on', !!mc);
@@ -782,7 +843,7 @@ $('#timeline').addEventListener('mousedown', e => {
 document.addEventListener('mousemove', e => {
   if (!tlDrag) return;
   const dx = (e.clientX - tlDrag.x0) / tlPps();
-  if (Math.abs(e.clientX - tlDrag.x0) > 3) tlDrag.moved = true;
+  if (Math.abs(e.clientX - tlDrag.x0) > 3 && !tlDrag.moved) { tlDrag.moved = true; checkpoint(); }
   if (!tlDrag.moved) return;
   const ev = tlDrag.ev;
   if (tlDrag.mode === 'start') ev.start = Math.round(clamp(tlDrag.s0 + dx, 0, ev.end - 0.2) * 100) / 100;
@@ -804,13 +865,24 @@ document.addEventListener('mouseup', () => {
 function renderHelp() {
   const pills = arr => arr.map(x => `<span class="pill">${esc(x)}</span>`).join('');
   $('#tab-help').innerHTML = `
-    <p class="muted">VoiceTag ${APP_VERSION} · <a href="#" id="lnkUpdates">check for a newer version</a></p>
+    <p class="muted">TACTIQ ANALYST ${APP_VERSION} · <a href="#" id="lnkUpdates">check for a newer version</a></p>
+    <h3>Keyboard</h3>
+    <p class="small"><kbd>Space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> 5 s (<kbd>Shift</kbd> 1 s) · <kbd>,</kbd><kbd>.</kbd> one frame · <kbd>F9</kbd> voice on/off · <kbd>F8</kbd> tracking mode ·
+    <kbd>[</kbd> clip in · <kbd>]</kbd> clip out · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo · <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo · <kbd>Ctrl</kbd>+<kbd>S</kbd> save · <kbd>/</kbd> type a command · letters = code buttons</p>
+    <h3>Projects</h3><p>🏠 opens the dashboard. A project is a folder with the project file, backups (every 10 min), screenshots, clips, reports and tracking data. It saves itself every minute.</p>
+    <h3>Manual tracking (Track tab)</h3>
+    <ol><li>Add tracks: <b>+ Players from squad</b>, unknown players, the ball or a referee.</li>
+    <li><b>Calibrate</b>: pause on a frame, 🎯 Calibrate, click 4–6+ known pitch points. Add a new calibration when the camera moves; ⛔ for close-ups / replays.</li>
+    <li>Turn tracking on (<kbd>F8</kbd>), select a player (<kbd>Tab</kbd>), click their feet. The video jumps forward by the step (e.g. 5 frames). Repeat.</li>
+    <li>Between keyframes positions are <i>interpolated</i> (dashed) only for short gaps – never across occluded / out-of-frame marks.</li>
+    <li>Right-click or <kbd>Delete</kbd> removes a keyframe, drag a marker to move it, <kbd>Enter</kbd>/<kbd>Backspace</kbd> step without clicking.</li></ol>
+    <p>🗺 2D shows the tracked players on the pitch with trails. Maps → Tracking heatmap / Average positions. Export → Tracking CSV/JSON.</p>
     <h3>Ways to tag</h3>
     <ol>
       <li><b>Code window</b> – click a button or press its key. Event buttons make a clip around that moment. Phase buttons (Build-up…) start on the first press and stop on the second.</li>
       <li><b>Labels</b> – after a code, click a player / outcome / zone button (or its key). It goes to the latest tag. Click a row in Events (or a bar in the timeline) to choose another tag.</li>
       <li><b>Location</b> – after tagging, click the pitch where it happened (passes/crosses: click the start, then the end).</li>
-      <li><b>Voice</b> (offline) – press <kbd>M</kbd>. Say exactly what is written in Settings → <b>Voice commands</b>. Say <code>same player cross</code> to reuse the last player.</li>
+      <li><b>Voice</b> (offline) – press <kbd>F9</kbd>. Say exactly what is written in Settings → <b>Voice commands</b>. Say <code>same player cross</code> to reuse the last player.</li>
       <li><b>Live</b> – no video? Press 🔴 Live, start the clock and tag from the touchline. Later open the video and use 📋 Match → Sync.</li>
     </ol>
     <h3>Match clock</h3><p>Choose the period, go to the kick-off in the video and press <b>⏱ Kick-off</b>. Press <b>⏹ End period</b> at half-time / full-time. Tags then show the match minute, and minutes played are calculated from the squad and substitutions (📋 Match).</p>
@@ -848,7 +920,10 @@ let autosaveTimer = null;
 function autosave() { clearTimeout(autosaveTimer); autosaveTimer = setTimeout(autosaveNow, 400); }
 function autosaveNow() {
   try {
-    if (events.length || Object.keys(match.kickoffs).length) localStorage.setItem(sessionKey, JSON.stringify({ events, nextId, match, video: videoInfo, savedAt: new Date().toISOString() }));
+    const hasTrack = typeof TR !== 'undefined' && TR.tracks.length;
+    if (events.length || Object.keys(match.kickoffs).length || hasTrack || (typeof clips !== 'undefined' && clips.length))
+      localStorage.setItem(sessionKey, JSON.stringify({ events, nextId, match, video: videoInfo, savedAt: new Date().toISOString(),
+        tracks: hasTrack ? TR.tracks : [], cals: typeof TR !== 'undefined' ? TR.cals : [], clips: typeof clips !== 'undefined' ? clips : [] }));
     else localStorage.removeItem(sessionKey);
   } catch (e) { /* ignore */ }
 }
@@ -860,21 +935,23 @@ const modalOpen = () => !$('#settings').classList.contains('hidden') || Dlg.isOp
 document.addEventListener('keydown', e => {
   if (config.general.ptt && e.code === config.general.pttKey && Voice.on) { e.preventDefault(); Voice.setHeld(true); return; }
   const tag = (e.target.tagName || '').toLowerCase();
+  if (!modalOpen() && !(tag === 'input' || tag === 'select' || tag === 'textarea')) { for (const f of HOOKS.key) if (f(e)) return; }
+  if (e.key === (config.general.micKey || 'F9') && !modalOpen()) { e.preventDefault(); toggleMic(); return; }
   if (modalOpen()) { if (e.key === 'Escape') { if (!$('#settings').classList.contains('hidden')) closeSettings(); else if (Dlg.isOpen()) $('#dlgX').click(); else Draw.close(); } return; }
   if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
   if (e.altKey) return;
-  if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); undo(); return; }
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); undo(); return; }
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y' || ((e.key === 'z' || e.key === 'Z') && e.shiftKey))) { e.preventDefault(); redo(); return; }
   if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) { e.preventDefault(); $('#btnSaveProj').click(); return; }
   if (e.ctrlKey || e.metaKey) return;
   if (e.key === ' ') { e.preventDefault(); togglePlay(); return; }
   if (e.key === 'ArrowLeft') { e.preventDefault(); seek(e.shiftKey ? -1 : -5); return; }
   if (e.key === 'ArrowRight') { e.preventDefault(); seek(e.shiftKey ? 1 : 5); return; }
-  if (e.key === ',' || e.key === '.') { e.preventDefault(); if (hasVideo()) { video.pause(); seek(e.key === ',' ? -0.04 : 0.04); } return; }
+  if (e.key === ',' || e.key === '.') { e.preventDefault(); stepFrame(e.key === ',' ? -1 : 1); return; }
   if (e.key === '/') { e.preventDefault(); $('#cmdInput').focus(); return; }
   if (e.key === 'Escape') { if (typeof PL !== 'undefined' && PL.active) plStop(); locAsk = null; renderCodeWindow(); return; }
   if (e.key.length !== 1) return;
   const k = e.key.toUpperCase();
-  if (k === 'M') { e.preventDefault(); toggleMic(); return; }
   if (e.repeat) return;
   const h = VOC.hotkeys[k];
   if (!h) return;
@@ -901,3 +978,42 @@ window.addEventListener('DOMContentLoaded', () => {
   const tick = () => { HOOKS.tick.forEach(f => { try { f(); } catch (err) { console.error(err); } }); requestAnimationFrame(tick); };
   requestAnimationFrame(tick);
 });
+
+/* ---------------------------------------------------------------- PLAYER CONTROLS (0.1) */
+function stepFrame(n) {
+  if (!hasVideo()) return;
+  video.pause();
+  const fd = frameDur(), cur = Math.round(video.currentTime / fd);
+  video.currentTime = clamp((cur + n) * fd + fd * 0.1, 0, video.duration || 1e9);   // land inside the frame, not on its edge
+}
+$('#btnStop').onclick = () => { if (hasVideo()) { video.pause(); video.currentTime = 0; } else if (live.on) { live.running = false; live.base = 0; updateLiveClockUI(); } };
+$('#btnFrameBack').onclick = () => stepFrame(-1);
+$('#btnFrameFwd').onclick = () => stepFrame(1);
+$('#volRange').oninput = e => { video.volume = Number(e.target.value); video.muted = video.volume === 0; $('#btnMute').textContent = video.muted ? '🔇' : '🔊'; };
+$('#btnMute').onclick = () => { video.muted = !video.muted; $('#btnMute').textContent = video.muted ? '🔇' : '🔊'; };
+$('#btnFull').onclick = () => { const w = $('#videoWrap'); if (document.fullscreenElement) document.exitFullscreen(); else w.requestFullscreen().catch(() => toast('Full screen is not available', 'bad')); };
+document.addEventListener('fullscreenchange', () => setTimeout(() => { if (typeof Draw !== 'undefined' && (Draw.editing || Draw.showing)) Draw.place(); HOOKS.render.forEach(f => { try { f('resize'); } catch (e) { /* ignore */ } }); }, 200));
+async function screenshot() {
+  if (!hasVideo() || !video.videoWidth) { toast('Open a video first', 'bad'); return; }
+  const c = document.createElement('canvas'); c.width = video.videoWidth; c.height = video.videoHeight;
+  const ctx = c.getContext('2d'); ctx.drawImage(video, 0, 0);
+  if (typeof Draw !== 'undefined' && Draw.showing) drawShapes(ctx, Draw.showing.shapes, c.width, c.height);
+  if (typeof TR !== 'undefined' && TR.on) drawTrackingOverlay(ctx, c.width, c.height, true);
+  const data = c.toDataURL('image/png');
+  const name = (project.info.name || (videoInfo.name || 'match').replace(/\.[^.]+$/, '')) + ' ' + fmtTime(video.currentTime).replace(':', '-') + ' f' + Math.round(video.currentTime / frameDur()) + '.png';
+  if (project.dir && api.writeBinary) { const f = await api.writeBinary({ file: project.dir + '/screenshots/' + name.replace(/[\\/:*?"<>|]/g, ''), base64: data.split(',')[1] }); toast('📷 Saved to screenshots: ' + name, 'ok'); return f; }
+  const bin = Uint8Array.from(atob(data.split(',')[1]), ch => ch.charCodeAt(0));
+  const p = await api.saveFile({ defaultName: name, filters: [{ name: 'PNG image', extensions: ['png'] }], data: bin, encoding: 'binary' });
+  if (p) toast('📷 Screenshot saved', 'ok');
+}
+$('#btnShot').onclick = screenshot;
+$('#btnVideoInfo').onclick = () => {
+  if (!hasVideo()) { toast('Open a video first', 'bad'); return; }
+  const m = videoMeta || {};
+  const row = (k, v) => `<tr><td class="muted">${k}</td><td>${esc(v)}</td></tr>`;
+  Dlg.open('ℹ Video information', `<table class="sq">${row('File', videoInfo.name)}${row('Location', videoInfo.path || '(browser)')}
+    ${row('Duration', fmtTime(m.duration || video.duration || 0))}${row('Resolution', (m.width || video.videoWidth) + ' × ' + (m.height || video.videoHeight))}
+    ${row('Frame rate', m.fps ? m.fps + ' fps' : 'unknown (25 assumed for frame steps)')}${row('Video codec', m.vcodec || '?')}${row('Audio', m.acodec || 'none')}
+    ${row('Rotation', (m.rotation || 0) + '°')}${row('Size', m.size ? (m.size / 1048576).toFixed(1) + ' MB' : '?')}
+    ${row('Playing from', videoInfo.playPath ? 'converted MP4 copy' : 'original file')}${m.warning ? row('Warning', m.warning) : ''}</table>`);
+};

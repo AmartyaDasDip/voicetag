@@ -1,4 +1,4 @@
-VoiceTag – Windows desktop app for football match tagging
+TACTIQ ANALYST (formerly VoiceTag) – Windows desktop app for football video analysis
 ==========================================================
 
 কীভাবে ইনস্টলার বানাবেন (একবারই করতে হবে)

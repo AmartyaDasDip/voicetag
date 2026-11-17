@@ -1,8 +1,8 @@
 {
   "name": "voicetag",
-  "productName": "VoiceTag",
-  "version": "1.1.0",
-  "description": "Football match tagging with code window, hotkeys and offline voice commands",
+  "productName": "TACTIQ ANALYST",
+  "version": "2.0.0",
+  "description": "TACTIQ ANALYST \u2013 football video analysis: voice tagging, code window, manual tracking, pitch calibration",
   "main": "main.js",
   "author": "Dumitru Ciprian Lulciuc",
   "license": "UNLICENSED",
@@ -20,9 +20,12 @@
   },
   "build": {
     "appId": "com.voicetag.app",
-    "productName": "VoiceTag",
+    "productName": "TACTIQ ANALYST",
     "copyright": "VoiceTag",
-    "directories": { "output": "dist", "buildResources": "build" },
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
     "files": [
       "main.js",
       "preload.js",
@@ -33,11 +36,26 @@
       "package.json"
     ],
     "extraResources": [
-      { "from": "model", "to": "model", "filter": ["model.tar.gz"] }
+      {
+        "from": "model",
+        "to": "model",
+        "filter": [
+          "model.tar.gz"
+        ]
+      }
     ],
-    "asarUnpack": ["node_modules/ffmpeg-static/**"],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**"
+    ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "build/icon.png"
     },
     "nsis": {
@@ -46,8 +64,16 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "VoiceTag",
-      "artifactName": "VoiceTag-Setup-${version}.${ext}"
-    }
+      "shortcutName": "TACTIQ ANALYST",
+      "artifactName": "TACTIQ-ANALYST-Setup-${version}.${ext}",
+      "uninstallDisplayName": "TACTIQ ANALYST"
+    },
+    "fileAssociations": [
+      {
+        "ext": "tactiq",
+        "name": "TACTIQ ANALYST project",
+        "description": "TACTIQ ANALYST project"
+      }
+    ]
   }
 }

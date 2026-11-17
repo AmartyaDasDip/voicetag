@@ -7,6 +7,7 @@
 const PL = { codes: new Set(), excluded: new Set(), queue: [], idx: -1, active: false };
 function playlistItems() {
   const pp = $('#plPlayer').value, po = $('#plOutcome').value, pl = $('#plLabel').value;
+  if (typeof plSource === 'function' && plSource() === 'clips') return clipItems().filter(e => !pp || e.playerId === pp);
   const [lg, ll] = pl ? pl.split('|') : [];
   return sortedEvents().filter(e => (!PL.codes.size || PL.codes.has(e.codeId)) && (!pp || e.playerId === pp) && (!po || e.outcomeId === po) && (!pl || (e.labels || {})[lg] === ll));
 }
@@ -14,7 +15,8 @@ function clipName(e) { return [e.playerId ? playerLabel(e) : '', e.code, e.outco
 function renderPlaylist() {
   const used = config.codes.filter(c => events.some(e => e.codeId === c.id));
   [...PL.codes].forEach(id => { if (!used.some(c => c.id === id)) PL.codes.delete(id); });
-  $('#plCodes').innerHTML = used.length
+  const clipMode = typeof plSource === 'function' && plSource() === 'clips';
+  $('#plCodes').innerHTML = clipMode ? '<span class="muted small">Clips you made with [ In / Out ] and ✂ Clip. Filters: player only.</span>' : used.length
     ? used.map(c => `<span class="chip ${PL.codes.has(c.id) ? 'on' : ''}" data-plc="${esc(c.id)}"><span class="dot" style="background:${esc(c.color)}"></span>${esc(c.name)} <span class="muted">${events.filter(e => e.codeId === c.id).length}</span></span>`).join('')
     : '<span class="muted small">Tag something first. Then pick codes here (none picked = all).</span>';
   const items = playlistItems();
@@ -23,7 +25,7 @@ function renderPlaylist() {
     <td><input type="checkbox" data-plx="${e.id}" ${PL.excluded.has(e.id) ? '' : 'checked'}></td>
     <td><span class="tlink" data-plgo="${e.id}">${esc(matchClock(e.t) || fmtTime(e.start))}</span></td>
     <td>${esc(clipName(e))}${(e.drawings || []).length ? ' ✏' : ''}${e.note ? ' 📝' : ''}${Object.values(e.labels || {}).length ? ' <span class="muted small">' + esc(Object.values(e.labels).join(', ')) + '</span>' : ''}</td>
-    <td class="muted small">${fmtDur(e.end - e.start)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No clips match.</td></tr>';
+    <td class="muted small">${fmtDur(e.end - e.start)}${e.clipId ? ` <button class="small danger" data-delclip="${esc(e.clipId)}" title="Delete clip">✕</button>` : ''}</td></tr>`).join('') || `<tr><td colspan="4" class="muted">${clipMode ? 'No saved clips yet. Set [ In and Out ] under the video, then press ✂ Clip.' : 'No clips match.'}</td></tr>`;
   const sel = items.filter(e => !PL.excluded.has(e.id));
   $('#plInfo').textContent = sel.length + ' clip(s), ' + fmtTime(sel.reduce((s, e) => s + e.end - e.start, 0)) + ' total';
 }
@@ -35,11 +37,13 @@ $('#plCodes').addEventListener('click', e => {
 });
 ['#plPlayer', '#plOutcome', '#plLabel'].forEach(s => $(s).onchange = renderPlaylist);
 $('#plAll').onchange = e => { playlistItems().forEach(x => e.target.checked ? PL.excluded.delete(x.id) : PL.excluded.add(x.id)); renderPlaylist(); };
-$('#plTable').addEventListener('change', e => { const x = e.target.closest('[data-plx]'); if (!x) return; const id = Number(x.dataset.plx); x.checked ? PL.excluded.delete(id) : PL.excluded.add(id); renderPlaylist(); });
+$('#plTable').addEventListener('change', e => { const x = e.target.closest('[data-plx]'); if (!x) return; const id = /^c_/.test(x.dataset.plx) ? x.dataset.plx : Number(x.dataset.plx); x.checked ? PL.excluded.delete(id) : PL.excluded.add(id); renderPlaylist(); });
 $('#plTable').addEventListener('click', e => {
+  const dc = e.target.closest('[data-delclip]');
+  if (dc) { if (confirm('Delete this clip?')) { checkpoint(); clips = clips.filter(c => c.id !== dc.dataset.delclip); renderAll(); autosave(); } return; }
   const g = e.target.closest('[data-plgo]'); if (!g) return;
-  const items = selectedClips(); const i = items.findIndex(x => x.id === Number(g.dataset.plgo));
-  if (i >= 0) startPlaylist(items, i); else { const ev = events.find(x => x.id === Number(g.dataset.plgo)); if (ev && hasVideo()) video.currentTime = ev.start; }
+  const key = g.dataset.plgo, items = selectedClips(); const i = items.findIndex(x => String(x.id) === key);
+  if (i >= 0) startPlaylist(items, i); else { const ev = playlistItems().find(x => String(x.id) === key); if (ev && hasVideo()) video.currentTime = ev.start; }
 });
 const selectedClips = () => playlistItems().filter(e => !PL.excluded.has(e.id));
 function startPlaylist(items, from = 0) {
