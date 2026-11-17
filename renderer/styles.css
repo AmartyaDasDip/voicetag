@@ -211,3 +211,11 @@ textarea{width:100%;min-height:150px;font-family:Consolas,monospace;font-size:12
 .lmlist div.on{background:rgba(62,166,255,.2)}
 .lmlist div.done{color:var(--ok)}
 .calbig .box{width:min(1400px,97vw)!important;height:min(900px,95vh)!important}
+
+/* AI detection */
+.aibar { height: 8px; background: var(--bg3, #222); border-radius: 4px; overflow: hidden; margin: 8px 0 4px; }
+.aibar > div { height: 100%; background: var(--ok, #2ecc71); transition: width .3s; }
+label.blk { display: block; margin: 5px 0; }
+.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1px solid #000; vertical-align: -2px; margin-right: 4px; }
+table.aimap { width: 100%; border-collapse: collapse; } table.aimap td, table.aimap th { padding: 4px 6px; text-align: left; border-bottom: 1px solid rgba(255,255,255,.08); }
+.badge.aib { background: #6c4bd6; color: #fff; font-size: 10px; padding: 0 4px; }

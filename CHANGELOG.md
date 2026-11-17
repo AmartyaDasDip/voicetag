@@ -1,5 +1,25 @@
 # TACTIQ ANALYST – changelog
 
+## 2.1.0 – roadmap phase 0.4: AI player detection & tracking
+
+- **🤖 Auto-detect players** (Track tab): finds every person on the pitch with a YOLO11 detector, follows
+  them frame to frame (ByteTrack-style tracker with camera-pan compensation) and splits them into the two
+  teams by shirt colour. Referees, goalkeepers and staff go to “Other”.
+- Runs fully offline in a background process (no internet, no Python). Uses the graphics card through
+  DirectX 12 (DirectML) when possible, otherwise the processor.
+- Two models: **Fast** (yolo11n – default on 8 GB PCs) and **Accurate** (yolo11s – default on 12 GB+).
+  Analyse every frame, every 2nd, 3rd or 5th frame.
+- Range: from the current moment for N seconds, the clip IN–OUT marks, or the whole video. Progress, time left, cancel.
+- Results dialog: kit colour swatches → Home / Away / Other (guessed from the team colours in project details),
+  ignore short tracks, drop people off the pitch (with a calibration), import the ball (experimental),
+  replace an earlier AI run. The raw result is saved in the project’s `tracking_data/` folder.
+- AI tracks are normal tracks: edit, assign squad players, correct points, 2D view, heat maps, exports.
+  New correction tools: **⚠ Next unsure point**, **✂ Split selected here**, **⇄ Join selected with…**, remove all AI tracks.
+- “tracks on video” option shows the tracks while the video plays (view only) without turning tracking mode on.
+- Tracking CSV has a new `ai_confidence` column.
+- Test clips (Spain v England) in `testdata/clips/`. On a 2-core cloud machine the Fast model ran at about
+  4 frames/s on the processor alone; a normal Windows PC, and especially a graphics card, is faster.
+
 ## 2.0.0 – roadmap phases 0.1, 0.2 and 0.3 (VoiceTag becomes TACTIQ ANALYST)
 
 Everything from VoiceTag 1.x is kept: voice tagging with your own commands, code window, phases,

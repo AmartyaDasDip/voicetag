@@ -2,7 +2,7 @@
 /* =====================================================================
    VoiceTag core: helpers, settings model, voice-command matching
    ===================================================================== */
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '2.1.0';
 const APP_NAME = 'TACTIQ ANALYST';
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];

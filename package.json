@@ -1,8 +1,8 @@
 {
   "name": "voicetag",
   "productName": "TACTIQ ANALYST",
-  "version": "2.0.0",
-  "description": "TACTIQ ANALYST \u2013 football video analysis: voice tagging, code window, manual tracking, pitch calibration",
+  "version": "2.1.0",
+  "description": "TACTIQ ANALYST – football video analysis: voice tagging, code window, manual tracking, pitch calibration",
   "main": "main.js",
   "author": "Dumitru Ciprian Lulciuc",
   "license": "UNLICENSED",
@@ -12,7 +12,8 @@
     "dist": "electron-builder --win nsis --x64"
   },
   "dependencies": {
-    "ffmpeg-static": "5.3.0"
+    "ffmpeg-static": "5.3.0",
+    "onnxruntime-node": "^1.23.2"
   },
   "devDependencies": {
     "electron": "38.8.6",
@@ -31,9 +32,13 @@
       "preload.js",
       "exporter.js",
       "renderer/**/*",
-      "!renderer/_test.mp4",
+      "!renderer/_*.mp4",
       "build/icon.png",
-      "package.json"
+      "package.json",
+      "engine/*.js",
+      "!node_modules/onnxruntime-node/bin/napi-v6/linux/**",
+      "!node_modules/onnxruntime-node/bin/napi-v6/darwin/**",
+      "!node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**"
     ],
     "extraResources": [
       {
@@ -42,10 +47,20 @@
         "filter": [
           "model.tar.gz"
         ]
+      },
+      {
+        "from": "engine/models",
+        "to": "ai-models",
+        "filter": [
+          "*.onnx"
+        ]
       }
     ],
     "asarUnpack": [
-      "node_modules/ffmpeg-static/**"
+      "node_modules/ffmpeg-static/**",
+      "node_modules/onnxruntime-node/**",
+      "node_modules/onnxruntime-common/**",
+      "engine/*.js"
     ],
     "win": {
       "target": [

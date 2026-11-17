@@ -37,8 +37,13 @@ jobs:
         shell: pwsh
         run: ./tools/get-model.ps1
 
-      - name: Install components (Electron, ffmpeg)
+      - name: Install components (Electron, ffmpeg, AI runtime)
         run: npm ci --no-audit --no-fund
+        env:
+          ONNXRUNTIME_NODE_INSTALL: skip
+
+      - name: Check AI engine loads
+        run: node -e "const o=require('onnxruntime-node');o.InferenceSession.create('engine/models/yolo11n.onnx').then(s=>console.log('AI model OK',s.inputNames,s.outputNames))"
 
       - name: Build installer
         run: npx electron-builder --win nsis --x64 --publish never

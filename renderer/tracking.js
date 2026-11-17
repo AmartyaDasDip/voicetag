@@ -189,6 +189,7 @@ function drawTrackingOverlay(ctx, W, H, forExport) {
     const x = p.x * W, y = p.y * H, col = trackColor(tk);
     ctx.save();
     if (p.kind === 'interp') { ctx.globalAlpha = 0.65; ctx.setLineDash([4, 3]); }
+    else if (p.src === 'ai' && p.conf != null && p.conf < 0.4) { ctx.globalAlpha = 0.7; ctx.setLineDash([2, 2]); }
     if (tk.kind === 'ball') {
       ctx.beginPath(); ctx.arc(x, y, r * 0.55, 0, Math.PI * 2); ctx.fillStyle = col; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#000'; ctx.stroke();
     } else {
@@ -210,8 +211,9 @@ function placeTrackView() {
 }
 let lastPaintT = -1;
 function paintTracking(force) {
-  const show = TR.on && hasVideo();
+  const show = (TR.on || TR.settings.overlay) && hasVideo();
   trackView.classList.toggle('hidden', !show);
+  trackView.style.pointerEvents = TR.on ? '' : 'none';   // view-only overlay when tracking mode is off
   if (!show) return;
   const t = video.currentTime;
   if (!force && t === lastPaintT && !TR.drag) return;
@@ -315,7 +317,7 @@ function renderTrackTab() {
     const l = TR.tracks.filter(x => (x.kind === 'ball' || x.kind === 'ref' ? 'Neutral' : x.team) === team);
     if (!l.length) return '';
     return `<h4>${esc(name)}</h4>` + l.map(x => `<div class="trk ${x.id === TR.sel ? 'sel' : ''}" data-tk="${x.id}"><span class="dot" style="background:${esc(trackColor(x))}"></span>
-      <span class="lb">${esc(trackLabel(x))}</span><span class="cov">${esc(coverage(x))}</span>
+      <span class="lb">${esc(trackLabel(x))}${x.ai ? ' <span class="badge aib">AI</span>' : ''}</span><span class="cov">${esc(coverage(x))}</span>
       <button class="small" data-tkedit="${x.id}" title="Edit">✎</button><button class="small danger" data-tkdel="${x.id}" title="Delete track">✕</button></div>`).join('');
   }).join('');
   const cals = sortedCals().map(c => { const q = calQuality(c); return `<div class="trk" data-cal="${c.id}"><span class="lb">${fmtTime(c.t)} ${c.type === 'none' ? '⛔ no calibration (cut / close-up)' : '🎯 ' + (c.points || []).length + ' points' + (c.blend ? ' · blends to next' : '')}</span>
@@ -328,11 +330,13 @@ function renderTrackTab() {
     <div class="toolbar small"><label><input type="checkbox" id="tkInterp" ${s.interp ? 'checked' : ''}> interpolate between keyframes</label>
       <label>max gap <input type="number" id="tkGap" value="${esc(s.maxGap)}" min="0.2" max="30" step="0.5" style="width:60px"> s</label>
       <label><input type="checkbox" id="tkLines" ${s.showLines ? 'checked' : ''}> pitch lines</label>
-      <label><input type="checkbox" id="tkAll" ${s.showAll ? 'checked' : ''}> show all tracks</label></div>
+      <label><input type="checkbox" id="tkAll" ${s.showAll ? 'checked' : ''}> show all tracks</label>
+      <label title="Show the tracks on the video while it plays, even when tracking mode is off"><input type="checkbox" id="tkOv" ${s.overlay ? 'checked' : ''}> tracks on video</label></div>
     ${tk ? `<div class="exportbox" style="margin:0 0 10px"><b>${esc(trackLabel(tk))}</b> at ${fmtTime(t)} (frame ${Math.round(t / frameDur())}): <span class="${p ? 'ok' : 'muted'}">${p ? (p.kind === 'key' ? 'keyframe' : p.kind === 'interp' ? 'interpolated' : VIS_NAME[p.vis]) : 'no position'}</span>
       <div class="toolbar" style="margin-top:6px"><button class="small" data-vis="occ">Occluded here</button><button class="small" data-vis="out">Out of frame here</button><button class="small" data-vis="unk">Unknown here</button>
       <button class="small" id="tkHold" title="Copy the last known position to this frame (player standing still)">⇢ Same as last</button><button class="small" id="tkDelPt">Delete point</button></div>
       <div class="toolbar"><button class="small" id="tkPrevK">◀ prev keyframe</button><button class="small" id="tkNextK">next keyframe ▶</button><button class="small" id="tkBack">− step</button><button class="small" id="tkFwd">+ step</button></div></div>` : ''}
+    <div id="aiBox"></div>
     <div class="toolbar"><button class="small" id="tkAddSquad">+ Players from squad</button><button class="small" id="tkAddH">+ Unknown ${esc(teamName('Home'))}</button><button class="small" id="tkAddA">+ Unknown ${esc(teamName('Away'))}</button><button class="small" id="tkAddBall">+ Ball</button><button class="small" id="tkAddRef">+ Referee</button></div>
     ${list || '<p class="muted small">No tracks yet. Add players or the ball, select one, turn tracking on, then click the player’s feet on the video.</p>'}
     <h4>Pitch calibration ${needCal ? '<span class="badge poor">needed for 2D / metres</span>' : ''}</h4>
@@ -348,6 +352,7 @@ function renderTrackTab() {
   el.querySelector('#tkGap').onchange = e => { s.maxGap = Number(e.target.value) || 3; markDirty(); paintTracking(true); };
   el.querySelector('#tkLines').onchange = e => { s.showLines = e.target.checked; paintTracking(true); };
   el.querySelector('#tkAll').onchange = e => { s.showAll = e.target.checked; paintTracking(true); };
+  el.querySelector('#tkOv').onchange = e => { s.overlay = e.target.checked; paintTracking(true); };
   el.querySelectorAll('[data-vis]').forEach(x => x.onclick = () => { const k = selTrack(); if (!k) return; checkpoint(); setPoint(k, video.currentTime, { vis: x.dataset.vis, x: null, y: null, src: 'manual' }); autosave(); renderTrackTab(); paintTracking(true); if (TR.settings.autoAdvance) advance(1); });
   b('#tkHold', () => { const k = selTrack(); if (!k) return; const i = findIdx(k.points, video.currentTime - frameDur() * 0.6), last = k.points.slice(0, i + 1).reverse().find(q => q.vis === 'v'); if (!last) { toast('No earlier position', 'bad'); return; } checkpoint(); setPoint(k, video.currentTime, { x: last.x, y: last.y, src: 'manual', vis: 'v' }); autosave(); renderTrackTab(); paintTracking(true); if (TR.settings.autoAdvance) advance(1); });
   b('#tkDelPt', () => { const k = selTrack(); if (!k) return; checkpoint(); if (!deletePoint(k, video.currentTime)) History.past.pop(); autosave(); renderTrackTab(); paintTracking(true); });
@@ -368,6 +373,7 @@ function renderTrackTab() {
   el.querySelectorAll('[data-caledit]').forEach(x => x.onclick = () => { const c = TR.cals.find(q => q.id === x.dataset.caledit); if (c && c.type !== 'none') { video.currentTime = c.t + 0.001; setTimeout(() => openCalibration(c), 250); } });
   el.querySelectorAll('[data-caldel]').forEach(x => x.onclick = () => { if (!confirm('Delete this calibration?')) return; checkpoint(); TR.cals = TR.cals.filter(q => q.id !== x.dataset.caldel); markDirty(); autosave(); renderTrackTab(); paintTracking(true); });
   el.querySelectorAll('[data-cal] .lb').forEach(x => x.onclick = () => { const c = TR.cals.find(q => q.id === x.parentElement.dataset.cal); if (c && hasVideo()) video.currentTime = c.t + 0.001; });
+  if (typeof renderAiBox === 'function') renderAiBox();
 }
 function addSquadTracks() {
   const sq = Object.keys(match.squad || {}).length ? config.players.filter(p => match.squad[p.id] && match.squad[p.id] !== 'out') : config.players;
@@ -534,14 +540,14 @@ function trackRows(hz) {
       rows.push(base.concat([Math.round(t / fd), Math.round(t * 1000) / 1000, matchClock(t), periodOf(t) || '',
         q && q.kind !== 'status' ? Math.round(q.x * 10000) / 10000 : '', q && q.kind !== 'status' ? Math.round(q.y * 10000) / 10000 : '',
         m ? Math.round(m[0] * 100) / 100 : '', m ? Math.round(m[1] * 100) / 100 : '',
-        q ? (q.kind === 'interp' ? 'interpolated' : q.src || 'manual') : '', q ? VIS_NAME[q.vis || 'v'] : 'unknown', c ? c.cal.id : '']));
+        q ? (q.kind === 'interp' ? 'interpolated' : q.src || 'manual') : '', q ? VIS_NAME[q.vis || 'v'] : 'unknown', c ? c.cal.id : '', q && q.conf != null ? q.conf : '']));
     };
     if (!hz) tk.points.forEach(q => add(q.t, posAt(tk, q.t)));
     else { const a = tk.points[0].t, b = tk.points[tk.points.length - 1].t; for (let t = a; t <= b + 1e-6; t += 1 / hz) { const q = posAt(tk, t); if (q) add(t, q); } }
   });
   return rows;
 }
-const TRACK_HEAD = ['track_id', 'kind', 'team', 'number', 'name', 'label', 'frame', 'time_s', 'match_time', 'period', 'img_x', 'img_y', 'pitch_x_m', 'pitch_y_m', 'source', 'visibility', 'calibration_id'];
+const TRACK_HEAD = ['track_id', 'kind', 'team', 'number', 'name', 'label', 'frame', 'time_s', 'match_time', 'period', 'img_x', 'img_y', 'pitch_x_m', 'pitch_y_m', 'source', 'visibility', 'calibration_id', 'ai_confidence'];
 async function exportTrackingCsv() {
   if (!TR.tracks.some(t => t.points.length)) { toast('No tracking data yet', 'bad'); return; }
   let hz = null;
@@ -584,7 +590,7 @@ function trackingSamples(filter = {}) {
 
 /* ---------------------------------------------------------------- WIRING */
 HOOKS.tick.push(() => {
-  if (TR.on) paintTracking(false);
+  if (TR.on || TR.settings.overlay) paintTracking(false);
   render2D(false);
 });
 HOOKS.render.push(tab => {

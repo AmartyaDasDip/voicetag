@@ -877,6 +877,13 @@ function renderHelp() {
     <li>Between keyframes positions are <i>interpolated</i> (dashed) only for short gaps – never across occluded / out-of-frame marks.</li>
     <li>Right-click or <kbd>Delete</kbd> removes a keyframe, drag a marker to move it, <kbd>Enter</kbd>/<kbd>Backspace</kbd> step without clicking.</li></ol>
     <p>🗺 2D shows the tracked players on the pitch with trails. Maps → Tracking heatmap / Average positions. Export → Tracking CSV/JSON.</p>
+    <h3>🤖 AI tracking (Track tab)</h3>
+    <ol><li><b>🤖 Auto-detect players</b>: choose a range (from here for N seconds, the clip IN–OUT, or the whole video), the model (Fast for 8 GB PCs, Accurate for 16 GB) and how many frames to look at. It runs in the background – keep tagging.</li>
+    <li>When it finishes, say which kit colour is which team. Referees, keepers and staff go to “Other”.</li>
+    <li>Check and fix: <b>⚠ Next unsure point</b> jumps to positions the AI was not sure about; click the right spot (tracking mode) to correct it.
+      <b>✂ Split selected here</b> when a track jumps to another player, <b>⇄ Join selected with…</b> when one player got two tracks, ✎ to say which squad player a track is.</li>
+    <li>Calibrate the pitch (above) to get metres, the 2D view and heat maps from AI tracks. With a calibration, people off the pitch can be dropped automatically.</li></ol>
+    <p class="small muted">Works best on the wide main / tactical camera. Close-ups and replays give poor results – analyse the wide-camera parts. The ball is experimental.</p>
     <h3>Ways to tag</h3>
     <ol>
       <li><b>Code window</b> – click a button or press its key. Event buttons make a clip around that moment. Phase buttons (Build-up…) start on the first press and stop on the second.</li>

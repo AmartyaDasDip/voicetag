@@ -1,6 +1,6 @@
 // VoiceTag – Electron main process
 'use strict';
-const { app, BrowserWindow, protocol, ipcMain, dialog, session, Menu, shell } = require('electron');
+const { app, BrowserWindow, protocol, ipcMain, dialog, session, Menu, shell, utilityProcess } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { Readable } = require('stream');
@@ -324,6 +324,50 @@ ipcMain.handle('probe-video', async (e, p) => {
   return { duration: r.duration, width: r.width, height: r.height, fps: r.fps, vcodec: r.vcodec, acodec: r.acodec,
     rotation: rot ? Number(rot[1]) : 0, size: st.size, ok: !!r.vcodec, warning: /Invalid data|corrupt|moov atom not found|error while decoding/i.test(r.text) ? 'The file may be damaged or incomplete.' : '' };
 });
+// ---------- AI player detection & tracking (runs in a background process) ----------
+function aiModelPath(name) {
+  const c = [path.join(process.resourcesPath || '', 'ai-models', name), path.join(__dirname, 'engine', 'models', name)];
+  return c.find(p => { try { return fs.statSync(p).isFile(); } catch (e) { return false; } }) || null;
+}
+let aiProc = null;
+ipcMain.handle('ai-info', async () => {
+  const os = require('os');
+  const ramGB = os.totalmem() / 1073741824;
+  return { fast: !!aiModelPath('yolo11n.onnx'), accurate: !!aiModelPath('yolo11s.onnx'), ffmpeg: !!ffmpegPath(),
+    recommended: ramGB < 12 ? 'fast' : 'accurate', ramGB: Math.round(ramGB * 10) / 10, cores: os.cpus().length, gpu: process.platform === 'win32' };
+});
+ipcMain.handle('ai-analyse', async (e, o) => {
+  if (aiProc) return { ok: false, error: 'An analysis is already running.' };
+  const ff = ffmpegPath();
+  if (!ff) return { ok: false, error: 'Video tools (ffmpeg) are missing.' };
+  if (!o || !o.video || !allowedMedia.has(path.resolve(o.video))) return { ok: false, error: 'Open the video first.' };
+  const model = aiModelPath(o.quality === 'accurate' ? 'yolo11s.onnx' : 'yolo11n.onnx') || aiModelPath('yolo11n.onnx');
+  if (!model) return { ok: false, error: 'The AI model files are missing from this installation.' };
+  const pr = await exporter.probe(ff, o.video);
+  if (!pr.width || !pr.height) return { ok: false, error: 'Could not read the video size.' };
+  const start = Math.max(0, Number(o.start) || 0);
+  const duration = Math.max(0.5, Math.min(Number(o.duration) || 10, (pr.duration || 1e9) - start));
+  const script = path.join(__dirname, 'engine', 'worker.js').replace('app.asar' + path.sep, 'app.asar.unpacked' + path.sep);
+  return new Promise(resolve => {
+    let done = false;
+    const finish = r => { if (done) return; done = true; try { aiProc && aiProc.kill(); } catch (er) { /* gone */ } aiProc = null; resolve(r); };
+    try { aiProc = utilityProcess.fork(script, [], { serviceName: 'TACTIQ AI engine', stdio: 'pipe' }); }
+    catch (er) { aiProc = null; return resolve({ ok: false, error: 'Could not start the AI engine: ' + er.message }); }
+    let errText = '';
+    if (aiProc.stderr) aiProc.stderr.on('data', d => { errText = (errText + d).slice(-2000); });
+    aiProc.on('message', m => {
+      if (!m) return;
+      if (m.type === 'progress') { try { e.sender.send('ai-progress', m); } catch (er) { /* window closed */ } }
+      else if (m.type === 'result') finish(m.result);
+      else if (m.type === 'error') finish({ ok: false, error: m.error });
+    });
+    aiProc.on('exit', code => finish({ ok: false, error: 'The AI engine stopped unexpectedly (code ' + code + '). ' + errText.slice(-400) }));
+    aiProc.postMessage({ cmd: 'run', opts: { ffmpeg: ff, video: o.video, start, duration, srcW: pr.width, srcH: pr.height, fps: pr.fps || 25,
+      model, stride: Math.max(1, Math.min(5, Number(o.stride) || 2)), prefer: o.cpuOnly ? 'cpu' : 'auto' } });
+  });
+});
+ipcMain.handle('ai-cancel', async () => { if (aiProc) { try { aiProc.postMessage({ cmd: 'cancel' }); } catch (e) { /* gone */ } setTimeout(() => { try { aiProc && aiProc.kill(); } catch (e) { /* gone */ } }, 1500); } return true; });
+
 ipcMain.handle('system-info', async () => {
   const os = require('os');
   return { platform: process.platform, release: os.release(), arch: process.arch, ramGB: Math.round(os.totalmem() / 1073741824 * 10) / 10,
