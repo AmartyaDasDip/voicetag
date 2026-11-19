@@ -240,6 +240,7 @@
         <h4>KPIs</h4><table id="kpiTable" class="sum"></table>
         <h4>1st half vs 2nd half</h4><table id="halfTable" class="sum"></table>
         <h4>Phases</h4><table id="durTable" class="sum"></table>
+        <h4>Ball possession (estimate)</h4><div id="possBox"></div>
       </div>
 
       <div class="tabpane hidden" id="tab-track"></div>
@@ -250,7 +251,7 @@
           <select id="mapPlayer"><option value="">All players</option></select>
           <select id="mapCode"><option value="">All codes</option></select>
           <select id="mapPeriod"><option value="">Whole match</option><option value="1">1st half</option><option value="2">2nd half</option></select>
-          <select id="mapMode"><option value="events">Tag locations</option><option value="heat">Tag heatmap</option><option value="trackheat">Tracking heatmap</option><option value="avgpos">Average positions (tracking)</option></select>
+          <select id="mapMode"><option value="events">Tag locations</option><option value="heat">Tag heatmap</option><option value="trackheat">Tracking heatmap</option><option value="avgpos">Average positions (tracking)</option><option value="ballheat">Ball heatmap (tracking)</option></select>
         </div>
         <div id="mapBox"></div>
         <div class="small muted" id="mapInfo"></div>
@@ -335,5 +336,6 @@
 <script src="clips.js"></script>
 <script src="tracking.js"></script>
 <script src="ai.js"></script>
+<script src="ball.js"></script>
 </body>
 </html>

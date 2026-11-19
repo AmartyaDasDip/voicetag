@@ -219,3 +219,10 @@ label.blk { display: block; margin: 5px 0; }
 .swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1px solid #000; vertical-align: -2px; margin-right: 4px; }
 table.aimap { width: 100%; border-collapse: collapse; } table.aimap td, table.aimap th { padding: 4px 6px; text-align: left; border-bottom: 1px solid rgba(255,255,255,.08); }
 .badge.aib { background: #6c4bd6; color: #fff; font-size: 10px; padding: 0 4px; }
+
+/* ball tools */
+.ballpanel { border: 1px solid rgba(255,255,255,.1); border-radius: 6px; padding: 6px 8px; margin: 0 0 10px; }
+.ballpanel canvas { width: 100%; height: 30px; display: block; cursor: pointer; border-radius: 3px; margin: 4px 0; }
+.lg { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 3px 0 8px; vertical-align: -1px; }
+.possbar { display: flex; height: 22px; border-radius: 4px; overflow: hidden; font-size: 12px; font-weight: 600; color: #fff; text-shadow: 0 0 3px #000; }
+.possbar > div { display: flex; align-items: center; justify-content: center; white-space: nowrap; overflow: hidden; }

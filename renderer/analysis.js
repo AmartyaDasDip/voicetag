@@ -87,8 +87,14 @@ function pitchMapSVG(list, mode, opts = {}) {
 }
 function renderMaps() {
   const team = $('#mapTeam').value, pl = $('#mapPlayer').value, cd = $('#mapCode').value, per = $('#mapPeriod').value, mode = $('#mapMode').value;
+  if (mode === 'ballheat') {
+    const s = typeof trackingSamples === 'function' ? trackingSamples({ kind: 'ball', period: per }) : [];
+    $('#mapBox').innerHTML = pitchMapSVG(s, 'heat');
+    $('#mapInfo').innerHTML = s.length ? `${s.length} ball positions (every 0.5 s where the ball was found or estimated and the pitch was calibrated).` : 'No calibrated ball positions yet (Track tab: track the ball and calibrate the pitch).';
+    return;
+  }
   if (mode === 'trackheat' || mode === 'avgpos') {
-    const s = typeof trackingSamples === 'function' ? trackingSamples({ team, playerId: pl, period: per }) : [];
+    const s = typeof trackingSamples === 'function' ? trackingSamples({ team, playerId: pl, period: per, notKind: 'ball' }) : [];
     if (mode === 'trackheat') $('#mapBox').innerHTML = pitchMapSVG(s, 'heat');
     else {
       const by = new Map(); s.forEach(q => { if (!by.has(q.tk.id)) by.set(q.tk.id, { tk: q.tk, xs: [], ys: [] }); const b = by.get(q.tk.id); b.xs.push(q.x); b.ys.push(q.y); });

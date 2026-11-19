@@ -120,7 +120,7 @@ function posAt(tk, t) {
   if (next && Math.abs(next.t - t) <= fd * 0.51) return next.vis === 'v' ? Object.assign({ kind: 'key' }, next) : { kind: 'status', vis: next.vis, t: next.t };
   if (!prev) return null;
   if (prev.vis !== 'v') return { kind: 'status', vis: prev.vis, t: prev.t };
-  if (next && next.vis === 'v' && TR.settings.interp && tk.interp !== false && next.t - prev.t <= Number(TR.settings.maxGap || 3)) {
+  if (next && next.vis === 'v' && TR.settings.interp && tk.interp !== false && next.t - prev.t <= Number(tk.maxGap || TR.settings.maxGap || 3)) {
     const a = (t - prev.t) / (next.t - prev.t);
     return { kind: 'interp', x: prev.x + (next.x - prev.x) * a, y: prev.y + (next.y - prev.y) * a, t, src: 'interp', vis: 'v' };
   }
@@ -260,15 +260,15 @@ trackView.addEventListener('mousedown', e => {
   if (e.button !== 0 || !TR.on) return;
   const [x, y, r] = evPos(e);
   const tk = selTrack();
-  const hitSel = tk && hitTrack(x, y, r, tk.id);
+  const hitSel = tk && video.paused && hitTrack(x, y, r, tk.id);   // while playing every click is a new point
   if (hitSel) { checkpoint(); TR.drag = { tk, moved: false }; return; }
   const hitAny = hitTrack(x, y, r);
-  if (hitAny && (e.shiftKey || !tk)) { TR.sel = hitAny.tk.id; renderTrackTab(); paintTracking(true); return; }
+  if (hitAny && (e.shiftKey || !tk) && video.paused) { TR.sel = hitAny.tk.id; renderTrackTab(); paintTracking(true); return; }
   if (!tk) { toast('Choose a player or the ball in the Track tab first (or press Tab)', 'bad', 2500); return; }
   checkpoint();
   setPoint(tk, video.currentTime, { x, y, src: 'manual', vis: 'v' });
   autosave(); paintTracking(true); renderTrackTab();
-  if (TR.settings.autoAdvance) setTimeout(() => advance(1), 60);
+  if (TR.settings.autoAdvance && video.paused) setTimeout(() => advance(1), 60);   // while playing: just add the point
 });
 window.addEventListener('mousemove', e => {
   if (!TR.drag) return;
@@ -337,6 +337,7 @@ function renderTrackTab() {
       <button class="small" id="tkHold" title="Copy the last known position to this frame (player standing still)">⇢ Same as last</button><button class="small" id="tkDelPt">Delete point</button></div>
       <div class="toolbar"><button class="small" id="tkPrevK">◀ prev keyframe</button><button class="small" id="tkNextK">next keyframe ▶</button><button class="small" id="tkBack">− step</button><button class="small" id="tkFwd">+ step</button></div></div>` : ''}
     <div id="aiBox"></div>
+    <div id="ballBox"></div>
     <div class="toolbar"><button class="small" id="tkAddSquad">+ Players from squad</button><button class="small" id="tkAddH">+ Unknown ${esc(teamName('Home'))}</button><button class="small" id="tkAddA">+ Unknown ${esc(teamName('Away'))}</button><button class="small" id="tkAddBall">+ Ball</button><button class="small" id="tkAddRef">+ Referee</button></div>
     ${list || '<p class="muted small">No tracks yet. Add players or the ball, select one, turn tracking on, then click the player’s feet on the video.</p>'}
     <h4>Pitch calibration ${needCal ? '<span class="badge poor">needed for 2D / metres</span>' : ''}</h4>
@@ -374,6 +375,7 @@ function renderTrackTab() {
   el.querySelectorAll('[data-caldel]').forEach(x => x.onclick = () => { if (!confirm('Delete this calibration?')) return; checkpoint(); TR.cals = TR.cals.filter(q => q.id !== x.dataset.caldel); markDirty(); autosave(); renderTrackTab(); paintTracking(true); });
   el.querySelectorAll('[data-cal] .lb').forEach(x => x.onclick = () => { const c = TR.cals.find(q => q.id === x.parentElement.dataset.cal); if (c && hasVideo()) video.currentTime = c.t + 0.001; });
   if (typeof renderAiBox === 'function') renderAiBox();
+  if (typeof renderBallPanel === 'function') renderBallPanel();
 }
 function addSquadTracks() {
   const sq = Object.keys(match.squad || {}).length ? config.players.filter(p => match.squad[p.id] && match.squad[p.id] !== 'out') : config.players;
@@ -575,6 +577,8 @@ function trackingSamples(filter = {}) {
   const { L, W } = pitchDims(), out = [];
   TR.tracks.forEach(tk => {
     if (!tk.points.length || tk.kind === 'ref') return;
+    if (filter.kind && tk.kind !== filter.kind) return;
+    if (filter.notKind && tk.kind === filter.notKind) return;
     if (filter.team && (tk.kind === 'ball' ? 'Neutral' : tk.team) !== filter.team) return;
     if (filter.playerId && tk.playerId !== filter.playerId) return;
     const a = tk.points[0].t, b = tk.points[tk.points.length - 1].t;

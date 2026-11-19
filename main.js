@@ -363,7 +363,8 @@ ipcMain.handle('ai-analyse', async (e, o) => {
     });
     aiProc.on('exit', code => finish({ ok: false, error: 'The AI engine stopped unexpectedly (code ' + code + '). ' + errText.slice(-400) }));
     aiProc.postMessage({ cmd: 'run', opts: { ffmpeg: ff, video: o.video, start, duration, srcW: pr.width, srcH: pr.height, fps: pr.fps || 25,
-      model, stride: Math.max(1, Math.min(5, Number(o.stride) || 2)), prefer: o.cpuOnly ? 'cpu' : 'auto' } });
+      model, stride: Math.max(1, Math.min(5, Number(o.stride) || 2)), prefer: o.cpuOnly ? 'cpu' : 'auto',
+      ball: ['off', 'normal', 'zoom'].includes(o.ball) ? o.ball : 'normal' } });
   });
 });
 ipcMain.handle('ai-cancel', async () => { if (aiProc) { try { aiProc.postMessage({ cmd: 'cancel' }); } catch (e) { /* gone */ } setTimeout(() => { try { aiProc && aiProc.kill(); } catch (e) { /* gone */ } }, 1500); } return true; });

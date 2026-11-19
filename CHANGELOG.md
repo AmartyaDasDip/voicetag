@@ -1,5 +1,25 @@
 # TACTIQ ANALYST – changelog
 
+## 2.2.0 – roadmap phase 0.5: AI ball tracking
+
+- **Zoomed second look for the ball**: after the normal pass the AI zooms in (2.2×, using the full-resolution
+  frame) where the ball should be – its predicted path, or where most players are – and looks again.
+  On the Spain v England test clips the ball was found in 58% instead of 46%, and 41% instead of 25%, of the frames,
+  with almost no false positives in a visual check of 60 samples. About 2× slower; can be switched off.
+- **Spare balls and logos ignored**: the engine measures the camera pan, so an object that stays put on the pitch
+  for 2 s with no player near it is recognised as a spare ball / logo, not the match ball.
+- The ball path is judged against real players only (not stewards or camera operators).
+- **Exact frame times**: the engine now reads every frame's real timestamp. Many videos have a slightly variable
+  frame rate; before, AI positions could be up to a frame off in these clips and drift by seconds over a full match.
+- **Ball timeline** in the Track tab: found / estimated (gaps up to 1 s) / missing, plus a possession strip; click to jump.
+- **⏭ Next ball gap** and **🎯 Fix ball by clicking** (0.5× speed, every click while playing adds a point).
+  Clicking while the video plays now always adds a point instead of jumping ahead.
+- **Possession estimate** (Stats tab and Track tab) from ball + player tracking: owner = nearest player within 2 m
+  (calibrated) or ~3% of the picture width; a change needs 0.4 s of control; time with an unknown owner is shown.
+- **Ball position as tag location** (option): new tags get the ball's pitch position automatically.
+- **Ball heatmap** in the Maps tab; the tracking heatmap no longer mixes in the ball.
+- Fixed: re-running the AI on a new range deleted earlier AI ball points outside that range.
+
 ## 2.1.0 – roadmap phase 0.4: AI player detection & tracking
 
 - **🤖 Auto-detect players** (Track tab): finds every person on the pitch with a YOLO11 detector, follows

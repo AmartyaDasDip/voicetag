@@ -883,7 +883,13 @@ function renderHelp() {
     <li>Check and fix: <b>⚠ Next unsure point</b> jumps to positions the AI was not sure about; click the right spot (tracking mode) to correct it.
       <b>✂ Split selected here</b> when a track jumps to another player, <b>⇄ Join selected with…</b> when one player got two tracks, ✎ to say which squad player a track is.</li>
     <li>Calibrate the pitch (above) to get metres, the 2D view and heat maps from AI tracks. With a calibration, people off the pitch can be dropped automatically.</li></ol>
-    <p class="small muted">Works best on the wide main / tactical camera. Close-ups and replays give poor results – analyse the wide-camera parts. The ball is experimental.</p>
+    <p class="small muted">Works best on the wide main / tactical camera. Close-ups and replays give poor results – analyse the wide-camera parts.</p>
+    <h3>⚽ Ball tracking (Track tab)</h3>
+    <ol><li>In 🤖 Auto-detect choose <b>Ball: zoom in for a second look</b> (best) – the AI looks at the whole picture, then zooms in where the ball should be. Spare balls by the touchline and logos are ignored.</li>
+    <li>The <b>ball timeline</b> shows where the ball was found (green), estimated between two sightings up to 1 s apart (orange) or is missing (dark red). The strip below it is the possession estimate. Click it to jump.</li>
+    <li><b>⏭ Next ball gap</b> jumps to the next missing part. <b>🎯 Fix ball by clicking</b> selects the ball and slows the video to 0.5×: press Space and click the ball while it plays – every click adds a point.</li>
+    <li><b>ball = tag location</b>: new tags get the ball’s pitch position automatically (needs a calibration).</li>
+    <li>Stats tab → <b>Ball possession (estimate)</b>; Maps → <b>Ball heatmap</b>.</li></ol>
     <h3>Ways to tag</h3>
     <ol>
       <li><b>Code window</b> – click a button or press its key. Event buttons make a clip around that moment. Phase buttons (Build-up…) start on the first press and stop on the second.</li>

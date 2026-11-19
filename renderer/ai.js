@@ -54,6 +54,7 @@ async function aiStartDialog() {
     <label class="blk">Model <select id="aiQ"><option value="fast" ${def === 'fast' ? 'selected' : ''}>Fast (smaller model – for 8 GB PCs)</option>
       ${info.accurate ? `<option value="accurate" ${def === 'accurate' ? 'selected' : ''}>Accurate (bigger model – finds far-away players better)</option>` : ''}</select></label>
     <label class="blk">Look at <select id="aiStride"><option value="1">every frame (slowest, smoothest)</option><option value="2" selected>every 2nd frame (recommended)</option><option value="3">every 3rd frame</option><option value="5">every 5th frame (fastest)</option></select></label>
+    <label class="blk">Ball <select id="aiBallMode"><option value="zoom">Find the ball – zoom in for a second look (best, about 2× slower)</option><option value="normal">Find the ball – one look (faster)</option><option value="off">Players only</option></select></label>
     <label class="blk"><input type="checkbox" id="aiCpu"> Use the processor only (tick this if the graphics card causes problems)</label>
     <p class="small muted">This PC: ${info.ramGB} GB RAM, ${info.cores} processor threads. ${info.gpu ? 'The graphics card is used automatically when possible (DirectX 12).' : ''} You can keep tagging while it runs.</p>`;
   let opts = null;
@@ -63,7 +64,7 @@ async function aiStartDialog() {
     if (mode === 'io') { start = clipIO.in; d = clipIO.out - clipIO.in; }
     if (mode === 'all') { start = 0; d = dur; }
     d = Math.min(d, Math.max(0.5, dur - start));
-    opts = { start: Math.round(start * 1000) / 1000, duration: Math.round(d * 1000) / 1000, quality: b.querySelector('#aiQ').value, stride: Number(b.querySelector('#aiStride').value), cpuOnly: b.querySelector('#aiCpu').checked };
+    opts = { start: Math.round(start * 1000) / 1000, duration: Math.round(d * 1000) / 1000, quality: b.querySelector('#aiQ').value, stride: Number(b.querySelector('#aiStride').value), cpuOnly: b.querySelector('#aiCpu').checked, ball: b.querySelector('#aiBallMode').value };
   } }]);
   if (r !== 'go' || !opts) return;
   aiRun(opts);
@@ -106,7 +107,8 @@ async function aiResultDialog(res, opts) {
   const swap = cl.length === 2 && hc && ac && d(cl[0], hc) + d(cl[1], ac) > d(cl[0], ac) + d(cl[1], hc);
   const html = `
     <p>Analysed <b>${fmtTime(m.start)} – ${fmtTime(m.start + m.duration)}</b>: ${m.frames} frames in ${aiDur(m.seconds)} (${m.framesPerSecond} frames/s, ${m.provider === 'dml' ? 'graphics card' : 'processor'}, ${esc(m.model)}).</p>
-    <p>Found <b>${tracks.length}</b> tracks${res.ball.length ? ` and the ball in ${res.ball.length} frames` : ''}.</p>
+    <p>Found <b>${tracks.length}</b> tracks${res.ball.length ? ` and the ball in ${res.ball.length} of ${m.frames} frames (${res.ballStats ? res.ballStats.coverage : Math.round(res.ball.length / m.frames * 100)}%)` : ''}.
+      ${res.ballStats && res.ballStats.mode === 'zoom' ? `<span class="small muted">${res.ballStats.fromZoom != null ? `${res.ballStats.fromZoom} of these were found only by the zoomed second look.` : ''}</span>` : ''}</p>
     <h4>Which team is which?</h4>
     <table class="aimap"><tr><th>Kit colour</th><th>Tracks</th><th>Import as</th></tr>
       ${['A', 'B'].map((k, i) => `<tr><td><span class="swatch" style="background:${rgbHex(cl[i])}"></span> Group ${k}</td><td>${cnt(k)}</td>
@@ -117,7 +119,7 @@ async function aiResultDialog(res, opts) {
       The goalkeepers usually wear a different colour, so they land in “Other” – change them to the right team with ✎ after importing.</p>
     <h4>Options</h4>
     <label class="blk">Ignore tracks shorter than <input type="number" id="aiMin" value="1" min="0" max="30" step="0.5" style="width:60px"> seconds</label>
-    <label class="blk"><input type="checkbox" id="aiBall" ${res.ball.length ? 'checked' : 'disabled'}> Import the ball (experimental – check it)</label>
+    <label class="blk"><input type="checkbox" id="aiBall" ${res.ball.length ? 'checked' : 'disabled'}> Import the ball (gaps up to 1 s are estimated; check it with ⏭ Next ball gap)</label>
     <label class="blk"><input type="checkbox" id="aiOff" ${hasCal ? 'checked' : 'disabled'}> Drop people standing off the pitch ${hasCal ? '' : '<span class="muted">(needs a pitch calibration)</span>'}</label>
     ${prevAi ? `<label class="blk"><input type="checkbox" id="aiReplace" checked> Replace the ${prevAi} AI tracks already in this range</label>` : ''}`;
   let choice = null;
@@ -154,7 +156,8 @@ function aiImport(res, ch) {
     let tk = TR.tracks.find(x => x.kind === 'ball');
     if (!tk) tk = newTrack({ kind: 'ball', team: 'Neutral', label: 'Ball' });
     tk.ai = tk.ai || { run };
-    const keep = tk.points.filter(p => p.src !== 'ai' && (p.t < t0 - 0.01 || p.t > t1 + 0.01) || p.src === 'manual');
+    if (!tk.maxGap) tk.maxGap = typeof BALL_GAP !== 'undefined' ? BALL_GAP : 1;
+    const keep = tk.points.filter(p => p.src === 'manual' || p.t < t0 - 0.01 || p.t > t1 + 0.01);
     const fd = frameDur();
     const add = res.ball.map(b => ({ t: qt(b.t), x: b.x, y: b.y, src: 'ai', vis: 'v', conf: b.conf })).filter(p => !keep.some(q => Math.abs(q.t - p.t) < fd * 0.51));
     tk.points = keep.concat(add).sort((a, b) => a.t - b.t);
