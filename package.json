@@ -1,7 +1,7 @@
 {
   "name": "voicetag",
   "productName": "TACTIQ ANALYST",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "TACTIQ ANALYST – football video analysis: voice tagging, code window, manual tracking, pitch calibration",
   "main": "main.js",
   "author": "Dumitru Ciprian Lulciuc",

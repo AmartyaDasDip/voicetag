@@ -176,7 +176,7 @@ function projectObject() {
     project: { info: typeof project !== 'undefined' ? project.info : {} },
     video: { path: videoInfo.path, name: videoInfo.name, size: videoInfo.size, meta: videoMeta },
     match, config, events, nextId, curTeam,
-    tracking: typeof TR !== 'undefined' ? { tracks: TR.tracks, cals: TR.cals, settings: TR.settings } : null,
+    tracking: typeof TR !== 'undefined' ? { tracks: TR.tracks, cals: TR.cals, settings: TR.settings, log: TR.log || [] } : null,
     clips: typeof clips !== 'undefined' ? clips : [] };
 }
 $('#btnSaveProj').onclick = async () => {
@@ -201,7 +201,7 @@ async function openProjectData(p, path, askConfig = true) {
   target = { kind: null, id: null, seq: 0 };
   live.on = false; live.running = false;
   curTeam = p.curTeam || 'Home';
-  if (typeof TR !== 'undefined') { TR.tracks = (p.tracking && p.tracking.tracks) || []; TR.cals = (p.tracking && p.tracking.cals) || []; if (p.tracking && p.tracking.settings) Object.assign(TR.settings, p.tracking.settings); TR.sel = null; }
+  if (typeof TR !== 'undefined') { TR.tracks = (p.tracking && p.tracking.tracks) || []; TR.cals = (p.tracking && p.tracking.cals) || []; TR.log = (p.tracking && p.tracking.log) || []; if (p.tracking && p.tracking.settings) Object.assign(TR.settings, p.tracking.settings); TR.sel = null; }
   if (typeof clips !== 'undefined') clips = p.clips || [];
   let loaded = false;
   if (p.video && p.video.path && api.isDesktop) {

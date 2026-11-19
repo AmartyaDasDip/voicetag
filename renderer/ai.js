@@ -25,13 +25,10 @@ function renderAiBox() {
   }
   box.innerHTML = `<div class="toolbar"><button class="small primary" id="aiRun" title="Detect and follow every player automatically">🤖 Auto-detect players (AI)</button>
     ${nAi ? `<button class="small" id="aiLow" title="Jump to the next AI position the engine was unsure about">⚠ Next unsure point</button><button class="small danger" id="aiClear">Remove ${nAi} AI tracks</button>` : ''}
-    ${selTrack() ? `<button class="small" id="tkJoin" title="Two tracks are the same person (e.g. after a collision): join them">⇄ Join selected with…</button><button class="small" id="tkSplit" title="The track jumps to another person from here: cut it into a new track">✂ Split selected here</button>` : ''}
     ${AI.last ? `<button class="small" id="aiAgain" title="Import the last analysis again with different team choices">↺ Re-import last run</button>` : ''}</div>`;
   box.querySelector('#aiRun').onclick = aiStartDialog;
   const c = box.querySelector('#aiClear'); if (c) c.onclick = aiClearTracks;
   const l = box.querySelector('#aiLow'); if (l) l.onclick = aiNextLow;
-  const j = box.querySelector('#tkJoin'); if (j) j.onclick = joinTracksDialog;
-  const sp = box.querySelector('#tkSplit'); if (sp) sp.onclick = splitTrackHere;
   const a = box.querySelector('#aiAgain'); if (a) a.onclick = () => aiResultDialog(AI.last.result, AI.last.opts);
 }
 function aiDur(s) { s = Math.max(0, Math.round(s || 0)); return s >= 3600 ? Math.floor(s / 3600) + ' h ' + Math.round(s % 3600 / 60) + ' min' : s >= 60 ? Math.floor(s / 60) + ' min ' + (s % 60) + ' s' : s + ' s'; }
@@ -121,12 +118,13 @@ async function aiResultDialog(res, opts) {
     <label class="blk">Ignore tracks shorter than <input type="number" id="aiMin" value="1" min="0" max="30" step="0.5" style="width:60px"> seconds</label>
     <label class="blk"><input type="checkbox" id="aiBall" ${res.ball.length ? 'checked' : 'disabled'}> Import the ball (gaps up to 1 s are estimated; check it with ⏭ Next ball gap)</label>
     <label class="blk"><input type="checkbox" id="aiOff" ${hasCal ? 'checked' : 'disabled'}> Drop people standing off the pitch ${hasCal ? '' : '<span class="muted">(needs a pitch calibration)</span>'}</label>
+    <label class="blk"><input type="checkbox" id="aiGK" ${hasCal ? 'checked' : 'disabled'}> Recognise goalkeepers (someone in “Other” who stays in a penalty area) ${hasCal ? '' : '<span class="muted">(needs a pitch calibration)</span>'}</label>
     ${prevAi ? `<label class="blk"><input type="checkbox" id="aiReplace" checked> Replace the ${prevAi} AI tracks already in this range</label>` : ''}`;
   let choice = null;
   const r = await Dlg.open('🤖 AI results', html, [{ label: 'Discard' }, { label: 'Import tracks', primary: true, value: 'imp', onClick: () => {
     const b = $('#dlgBody');
     choice = { A: b.querySelector('#aiMapA').value, B: b.querySelector('#aiMapB').value, other: b.querySelector('#aiMapO').value,
-      min: Number(b.querySelector('#aiMin').value) || 0, ball: b.querySelector('#aiBall').checked, off: b.querySelector('#aiOff').checked,
+      min: Number(b.querySelector('#aiMin').value) || 0, ball: b.querySelector('#aiBall').checked, off: b.querySelector('#aiOff').checked, gk: b.querySelector('#aiGK').checked,
       replace: !!(b.querySelector('#aiReplace') && b.querySelector('#aiReplace').checked) };
   } }]);
   if (r !== 'imp' || !choice) return;
@@ -162,10 +160,11 @@ function aiImport(res, ch) {
     const add = res.ball.map(b => ({ t: qt(b.t), x: b.x, y: b.y, src: 'ai', vis: 'v', conf: b.conf })).filter(p => !keep.some(q => Math.abs(q.t - p.t) < fd * 0.51));
     tk.points = keep.concat(add).sort((a, b) => a.t - b.t);
   }
+  const gks = ch.gk && typeof findGoalkeepers === 'function' ? applyGoalkeepers(findGoalkeepers(), true) : 0;
   TR.settings.showAll = true; TR.settings.overlay = true;
   if (Number(TR.settings.maxGap) < 1) TR.settings.maxGap = 1;
   markDirty(); autosave(); renderTrackTab(); paintTracking(true);
-  toast(`Imported ${added} AI tracks` + (dropped ? ` (${dropped} short/off-pitch skipped)` : ''), 'ok', 3500);
+  toast(`Imported ${added} AI tracks` + (dropped ? ` (${dropped} short/off-pitch skipped)` : '') + (gks ? `, ${gks} goalkeeper(s) recognised` : ''), 'ok', 3500);
 }
 
 function aiClearTracks() {
@@ -209,12 +208,7 @@ async function joinTracksDialog() {
   if (r !== 'ok' || !id) return;
   const other = TR.tracks.find(x => x.id === id); if (!other) return;
   checkpoint();
-  const fd = frameDur(), score = p => (p.src === 'manual' ? 2 : 0) + (p.conf == null ? 1 : p.conf);
-  const pts = tk.points.slice();
-  other.points.forEach(p => { const i = pts.findIndex(q => Math.abs(q.t - p.t) < fd * 0.51); if (i < 0) pts.push(p); else if (score(p) > score(pts[i])) pts[i] = p; });
-  tk.points = pts.sort((a, b) => a.t - b.t);
-  if (!tk.playerId && other.playerId) tk.playerId = other.playerId;
-  TR.tracks = TR.tracks.filter(x => x !== other);
+  mergeTracks(tk, other);
   markDirty(); autosave(); renderTrackTab(); paintTracking(true);
   toast('Joined – ' + trackLabel(tk) + ' now has ' + tk.points.length + ' points', 'ok');
 }
@@ -226,7 +220,8 @@ function splitTrackHere() {
   checkpoint();
   tk.points = tk.points.filter(p => p.t < t);
   const nk = newTrack({ team: tk.team, kind: tk.kind, label: (tk.label || 'P') + '′', ai: tk.ai ? Object.assign({}, tk.ai) : undefined });
-  nk.points = after;
+  nk.points = after; if (tk.removed) { nk.removed = tk.removed.filter(r => r.t >= t); tk.removed = tk.removed.filter(r => r.t < t); }
+  logCorrection(tk, t, 'split', trackLabel(nk));
   TR.sel = nk.id;
   markDirty(); autosave(); renderTrackTab(); paintTracking(true);
   toast('Split: the part from ' + fmtTime(t) + ' is now “' + trackLabel(nk) + '” – use ✎ to say who it is', 'ok', 3500);

@@ -2,7 +2,7 @@
 /* =====================================================================
    VoiceTag core: helpers, settings model, voice-command matching
    ===================================================================== */
-const APP_VERSION = '2.2.0';
+const APP_VERSION = '2.3.0';
 const APP_NAME = 'TACTIQ ANALYST';
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -310,7 +310,7 @@ function grammarWords(V = VOC) {
   add(V.players); add(V.codes); add(V.outcomes); add(V.labels); add(V.custom);
   CONTROL_WORDS.forEach(c => makeKeys(c.aliases).forEach(k => k.words.forEach(w => words.add(w))));
   [...START_W, ...STOP_W].forEach(w => words.add(w));
-  ['number', 'player', 'and', 'the'].forEach(w => words.add(w));
+  ['number', 'player', 'and', 'the', 'this', 'that', 'is', 'track'].forEach(w => words.add(w));
   return [...words, '[unk]'];
 }
 

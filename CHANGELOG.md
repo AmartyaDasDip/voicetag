@@ -1,5 +1,33 @@
 # TACTIQ ANALYST – changelog
 
+## 2.3.0 – roadmap phases 0.6 (hybrid tracking editor) and 0.7 (2D analytics)
+
+### 0.6 – correct AI tracking without losing the AI result
+- A corrected AI point keeps the original AI position (`orig`); deleted AI points are kept in `removed`;
+  every change goes into a corrections log (📝 Corrections, click a row to jump). The raw AI runs stay in tracking_data/.
+- ↺ AI position here, ↺ Restore AI track, "show AI originals" (magenta ring + line on the video).
+- Track timeline: one row per track showing AI / unsure AI / by hand / corrected / estimated / missing; click to select and jump.
+- Track continuation: when a track ends the likely continuations are listed (predicted position, time gap, kit colour,
+  team); click to join. ⏭ Next track end; 🔗 Auto-link broken tracks joins clear, mutual cases (undoable).
+- ⇆ Swap with… from here for ID switches; join / split moved into the selected-track box; ⏭ Next gap for any track.
+- Quick identity: "Who is …?" box, or say / type "this is nine" (number words, names and positions work).
+- Goalkeeper recognition: an "other" track that stays in a penalty area becomes the keeper of the team defending that goal
+  (also an option when importing AI results; needs a calibration).
+
+### 0.7 – 2D analytics (new Positions tab)
+- Selection: team; all / 1st half / 2nd half / in or out of possession (estimate) / during tags of a phase code;
+  whole video or clip IN–OUT; attacking direction auto (team nearer a goal defends it; keeper used if known) or set by hand.
+- Team shape per moment (7+ outfield players): width, length, defensive line height, distance between the three lines
+  (1-D k-means), convex-hull area, average distance to the centre; averages plus a chart over time.
+- Average positions with the team outline and defensive line; confidence-weighted heat map (team or one player).
+- Distance and speed per player from keyframes only: split at gaps and calibration changes, smoothed over 1 s,
+  measured every 0.4 s, impossible jumps dropped. Distance, m/min, max speed, high-intensity metres (≥19.8 km/h),
+  sprints (≥25.2 km/h for 1 s+), quality badge. Synthetic test with noise: distance within 1–2%, max speed within 3%.
+- Ball path map and ball location by thirds.
+- Data quality box on every view: time selected, share calibrated, players located, estimated and unsure-AI shares, warnings.
+- Positional CSV export; positional pages in the PDF match report (report also possible with tracking but no tags).
+- 2D view: show all / home / away / ball / selected, trail length 2–20 s.
+
 ## 2.2.0 – roadmap phase 0.5: AI ball tracking
 
 - **Zoomed second look for the ball**: after the normal pass the AI zooms in (2.2×, using the full-resolution

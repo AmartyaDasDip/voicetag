@@ -25,13 +25,13 @@ const History = {
   past: [], future: [], max: 60,
   snap() {
     return JSON.stringify({ events, nextId, match, open, curTeam,
-      tracks: typeof TR !== 'undefined' ? TR.tracks : [], cals: typeof TR !== 'undefined' ? TR.cals : [], clips: typeof clips !== 'undefined' ? clips : [] });
+      tracks: typeof TR !== 'undefined' ? TR.tracks : [], cals: typeof TR !== 'undefined' ? TR.cals : [], trlog: typeof TR !== 'undefined' ? TR.log || [] : [], clips: typeof clips !== 'undefined' ? clips : [] });
   },
   checkpoint() { this.past.push(this.snap()); if (this.past.length > this.max) this.past.shift(); this.future = []; markDirty(); },
   restore(str) {
     const o = JSON.parse(str);
     events = o.events; nextId = o.nextId; match = o.match; open = o.open || {}; curTeam = o.curTeam || curTeam;
-    if (typeof TR !== 'undefined') { TR.tracks = o.tracks || []; TR.cals = o.cals || []; }
+    if (typeof TR !== 'undefined') { TR.tracks = o.tracks || []; TR.cals = o.cals || []; TR.log = o.trlog || []; }
     if (typeof clips !== 'undefined') clips = o.clips || [];
     locAsk = null; renderAll(); autosave(); markDirty();
   },
@@ -145,7 +145,7 @@ function setVideo(info, playPath, keepTags) {
   if (keepTags) { renderAll(); return; }   // live session or project: keep the tags already loaded
   sessionKey = 'vt_session_' + (info.path || info.name) + '_' + info.size;
   events = []; undoStack = []; nextId = 1; open = {}; target = { kind: null, id: null, seq: 0 }; match = EMPTY_MATCH(); History.clear();
-  if (typeof TR !== 'undefined') { TR.tracks = []; TR.cals = []; }
+  if (typeof TR !== 'undefined') { TR.tracks = []; TR.cals = []; TR.log = []; }
   if (typeof clips !== 'undefined') clips = [];
   try {
     const saved = JSON.parse(localStorage.getItem(sessionKey) || 'null');
@@ -153,7 +153,7 @@ function setVideo(info, playPath, keepTags) {
         confirm('Found ' + saved.events.length + ' saved tags for "' + info.name + '".\n\nOK = restore them\nCancel = start a fresh session')) {
       events = saved.events; nextId = saved.nextId || (Math.max(0, ...events.map(e => e.id)) + 1);
       if (saved.match) match = Object.assign(EMPTY_MATCH(), saved.match);
-      if (saved.tracks && typeof TR !== 'undefined') { TR.tracks = saved.tracks; TR.cals = saved.cals || []; }
+      if (saved.tracks && typeof TR !== 'undefined') { TR.tracks = saved.tracks; TR.cals = saved.cals || []; TR.log = saved.trlog || []; }
       if (saved.clips && typeof clips !== 'undefined') clips = saved.clips;
     }
   } catch (e) { /* ignore */ }
@@ -388,6 +388,7 @@ $('#btnClear').onclick = () => {
 /* ---------------------------------------------------------------- COMMANDS (voice + typed) */
 function handleParsed(parsed, snapFor, source) {
   const heard = parsed.text;
+  if (typeof trackIdentityCommand === 'function' && trackIdentityCommand(heard)) { logVoice(heard, 'Track identity', 'ok'); return; }
   if (parsed.control) {
     logVoice(heard, 'Command: ' + parsed.control, 'ok');
     if (parsed.control === 'undo') undo();
@@ -890,6 +891,18 @@ function renderHelp() {
     <li><b>⏭ Next ball gap</b> jumps to the next missing part. <b>🎯 Fix ball by clicking</b> selects the ball and slows the video to 0.5×: press Space and click the ball while it plays – every click adds a point.</li>
     <li><b>ball = tag location</b>: new tags get the ball’s pitch position automatically (needs a calibration).</li>
     <li>Stats tab → <b>Ball possession (estimate)</b>; Maps → <b>Ball heatmap</b>.</li></ol>
+    <h3>✏ Correcting AI tracking (Track tab)</h3>
+    <ul><li>Nothing the AI found is ever lost: a corrected point keeps the AI position (<b>show AI originals</b>, <b>↺ AI position here</b>, <b>↺ Restore AI track</b>), deleted AI points are kept aside, and <b>📝 Corrections</b> lists every change.</li>
+    <li><b>Track timeline</b>: one row per track – green AI, orange unsure AI, blue by hand, magenta = corrected, grey = estimated, empty = missing. Click to select and jump.</li>
+    <li><b>Who is …?</b> type a number or name, or say / type <i>“this is nine”</i> with a track selected.</li>
+    <li><b>Continues as</b>: when a track stops, the likely continuation is suggested – click to join. <b>⏭ Next track end</b> walks through them; <b>🔗 Auto-link broken tracks</b> joins the clear cases at once.</li>
+    <li><b>⇆ Swap with… from here</b> when two players crossed and the AI swapped them; <b>✂ Split</b>, <b>⇄ Join</b>, <b>⏭ Next gap</b>; <b>🧤 Find goalkeepers</b> (needs a calibration).</li></ul>
+    <h3>📐 Positions tab (2D analytics)</h3>
+    <ul><li>Choose the team and the moments: all, a half, in / out of possession (estimate), or during tags of a phase code (e.g. Build-up), whole video or clip IN–OUT.</li>
+    <li><b>Team shape</b>: width, length, defensive line height, distance between the lines, area (compactness) – with a chart over time. <b>Average positions</b> and a confidence-weighted <b>heat map</b> (team or one player).</li>
+    <li><b>Distance and speed</b>: distance, m/min, max speed, high-intensity metres and sprints per player, with a quality badge. Video-derived estimates, not GPS.</li>
+    <li><b>Ball</b>: ball path and in which third the ball was. Everything is normalised so the team attacks to the right; set the direction yourself if “auto” gets it wrong.</li>
+    <li>The box at the top always says how much data the figures rest on. Export → <b>Positional CSV</b>; the PDF report gets a positional section automatically.</li></ul>
     <h3>Ways to tag</h3>
     <ol>
       <li><b>Code window</b> – click a button or press its key. Event buttons make a clip around that moment. Phase buttons (Build-up…) start on the first press and stop on the second.</li>
@@ -936,7 +949,7 @@ function autosaveNow() {
     const hasTrack = typeof TR !== 'undefined' && TR.tracks.length;
     if (events.length || Object.keys(match.kickoffs).length || hasTrack || (typeof clips !== 'undefined' && clips.length))
       localStorage.setItem(sessionKey, JSON.stringify({ events, nextId, match, video: videoInfo, savedAt: new Date().toISOString(),
-        tracks: hasTrack ? TR.tracks : [], cals: typeof TR !== 'undefined' ? TR.cals : [], clips: typeof clips !== 'undefined' ? clips : [] }));
+        tracks: hasTrack ? TR.tracks : [], cals: typeof TR !== 'undefined' ? TR.cals : [], trlog: typeof TR !== 'undefined' ? TR.log || [] : [], clips: typeof clips !== 'undefined' ? clips : [] }));
     else localStorage.removeItem(sessionKey);
   } catch (e) { /* ignore */ }
 }

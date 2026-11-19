@@ -130,13 +130,31 @@ function setPoint(tk, t, data) {
   t = qt(t);
   const pts = tk.points, i = pts.findIndex(p => Math.abs(p.t - t) < frameDur() * 0.51);
   const pt = Object.assign({ t, x: null, y: null, src: 'manual', vis: 'v' }, data, { t });
-  if (i >= 0) pts[i] = Object.assign(pts[i], pt); else { pts.push(pt); pts.sort((a, b) => a.t - b.t); }
+  if (i >= 0) {
+    const old = pts[i];
+    // correcting an AI point: keep what the AI said so it can always be seen and restored
+    if (pt.src === 'manual' && (old.src === 'ai' || old.orig)) {
+      if (!old.orig) old.orig = { x: old.x, y: old.y, conf: old.conf, vis: old.vis };
+      delete old.conf;
+      if (!TR.drag) logCorrection(tk, t, pt.vis !== 'v' ? 'status' : 'move', pt.vis !== 'v' ? VIS_NAME[pt.vis] : '');
+    }
+    pts[i] = Object.assign(old, pt);
+  } else { pts.push(pt); pts.sort((a, b) => a.t - b.t); if (pt.src === 'manual' && tk.ai && !TR.drag) logCorrection(tk, t, 'add'); }
   markDirty();
+}
+// corrections log (newest last) – what was changed by hand in AI tracking data
+function logCorrection(tk, t, act, note) {
+  if (!TR.log) TR.log = [];
+  TR.log.push({ at: Date.now(), t: Math.round(t * 1000) / 1000, tk: tk.id, label: trackLabel(tk), act, note: note || '' });
+  if (TR.log.length > 1000) TR.log.splice(0, TR.log.length - 1000);
 }
 function deletePoint(tk, t) {
   const i = tk.points.findIndex(p => Math.abs(p.t - t) < frameDur() * 0.51);
   if (i < 0) return false;
-  tk.points.splice(i, 1); markDirty(); return true;
+  const [p] = tk.points.splice(i, 1);
+  // a deleted AI point is kept aside (tk.removed) so the original AI result is never lost
+  if (p.src === 'ai' || p.orig) { if (!tk.removed) tk.removed = []; tk.removed.push(p.orig ? Object.assign({ t: p.t, src: 'ai' }, p.orig) : p); logCorrection(tk, p.t, 'delete'); }
+  markDirty(); return true;
 }
 const selTrack = () => TR.tracks.find(x => x.id === TR.sel) || null;
 function stepSeconds() { const s = TR.settings.step, fd = frameDur(); return s === '1f' ? fd : s === '5f' ? 5 * fd : s === '10f' ? 10 * fd : s === '0.5s' ? 0.5 : s === '1s' ? 1 : s === '2s' ? 2 : 5 * fd; }
@@ -200,6 +218,13 @@ function drawTrackingOverlay(ctx, W, H, forExport) {
       ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.8)'; ctx.strokeText(lbl, x, y - r * 0.9); ctx.fillStyle = '#fff'; ctx.fillText(lbl, x, y - r * 0.9);
     }
     if (sel) { ctx.setLineDash([]); ctx.globalAlpha = 1; ctx.beginPath(); ctx.arc(x, y, r * 1.9, 0, Math.PI * 2); ctx.strokeStyle = '#2ecc71'; ctx.lineWidth = 2; ctx.stroke(); }
+    // corrected AI point: show where the AI had it (hollow magenta ring + line)
+    if (p.kind === 'key' && p.orig && p.orig.x != null && (sel || TR.settings.showOrig) && !forExport) {
+      const ox = p.orig.x * W, oy = p.orig.y * H;
+      ctx.setLineDash([3, 3]); ctx.globalAlpha = 0.9; ctx.strokeStyle = '#ff4fd8'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(x, y); ctx.stroke();
+      ctx.setLineDash([]); ctx.beginPath(); ctx.arc(ox, oy, r * 0.7, 0, Math.PI * 2); ctx.stroke();
+    }
     ctx.restore();
   });
 }
@@ -276,7 +301,7 @@ window.addEventListener('mousemove', e => {
   setPoint(TR.drag.tk, video.currentTime, { x, y, src: 'manual', vis: 'v' });
   TR.drag.moved = true; paintTracking(true);
 });
-window.addEventListener('mouseup', () => { if (TR.drag) { const d = TR.drag; TR.drag = null; if (!d.moved) History.past.pop(); autosave(); renderTrackTab(); } });
+window.addEventListener('mouseup', () => { if (TR.drag) { const d = TR.drag; TR.drag = null; if (!d.moved) History.past.pop(); else { const q = d.tk.points.find(p => Math.abs(p.t - video.currentTime) < frameDur() * 0.51); if (q && q.orig) logCorrection(d.tk, q.t, 'move'); } autosave(); renderTrackTab(); } });
 
 /* ---------------------------------------------------------------- KEYS */
 HOOKS.key.push(e => {
@@ -336,6 +361,7 @@ function renderTrackTab() {
       <div class="toolbar" style="margin-top:6px"><button class="small" data-vis="occ">Occluded here</button><button class="small" data-vis="out">Out of frame here</button><button class="small" data-vis="unk">Unknown here</button>
       <button class="small" id="tkHold" title="Copy the last known position to this frame (player standing still)">⇢ Same as last</button><button class="small" id="tkDelPt">Delete point</button></div>
       <div class="toolbar"><button class="small" id="tkPrevK">◀ prev keyframe</button><button class="small" id="tkNextK">next keyframe ▶</button><button class="small" id="tkBack">− step</button><button class="small" id="tkFwd">+ step</button></div></div>` : ''}
+    <div id="edBox"></div>
     <div id="aiBox"></div>
     <div id="ballBox"></div>
     <div class="toolbar"><button class="small" id="tkAddSquad">+ Players from squad</button><button class="small" id="tkAddH">+ Unknown ${esc(teamName('Home'))}</button><button class="small" id="tkAddA">+ Unknown ${esc(teamName('Away'))}</button><button class="small" id="tkAddBall">+ Ball</button><button class="small" id="tkAddRef">+ Referee</button></div>
@@ -376,6 +402,7 @@ function renderTrackTab() {
   el.querySelectorAll('[data-cal] .lb').forEach(x => x.onclick = () => { const c = TR.cals.find(q => q.id === x.parentElement.dataset.cal); if (c && hasVideo()) video.currentTime = c.t + 0.001; });
   if (typeof renderAiBox === 'function') renderAiBox();
   if (typeof renderBallPanel === 'function') renderBallPanel();
+  if (typeof renderEditorBox === 'function') renderEditorBox();
 }
 function addSquadTracks() {
   const sq = Object.keys(match.squad || {}).length ? config.players.filter(p => match.squad[p.id] && match.squad[p.id] !== 'out') : config.players;
@@ -503,9 +530,10 @@ function render2D(force) {
   const { L, W } = pitchDims();
   const c = calAt(t);
   let inner = '', shown = 0, total = 0;
-  const trails = $('#p2trails').checked, trailSec = Number(TR.settings.trail) || 6;
+  const trails = $('#p2trails').checked, trailSec = Number(TR.settings.trail) || 6, show = $('#p2show') ? $('#p2show').value : 'all';
   TR.tracks.forEach(tk => {
     if (!tk.points.length) return;
+    if (show === 'ball' ? tk.kind !== 'ball' : show === 'sel' ? tk.id !== TR.sel : show !== 'all' ? (tk.kind === 'ball' ? false : tk.team !== show) : false) return;
     total++;
     if (trails) {
       const pts = [];
@@ -529,6 +557,8 @@ $('#btn2D').onclick = () => { const b = $('#pitch2d'); b.classList.toggle('hidde
 $('#p2close').onclick = () => $('#pitch2d').classList.add('hidden');
 $('#p2size').onchange = e => { const b = $('#pitch2d'); b.classList.remove('s', 'm', 'l'); b.classList.add(e.target.value); };
 $('#p2trails').onchange = () => render2D(true);
+$('#p2show').onchange = () => render2D(true);
+$('#p2trail').onchange = e => { TR.settings.trail = Number(e.target.value); render2D(true); };
 
 /* ---------------------------------------------------------------- EXPORT */
 function trackRows(hz) {

@@ -64,7 +64,8 @@
         <canvas id="drawView" class="hidden"></canvas>
         <div id="pitch2d" class="hidden"><div class="p2head"><b>2D</b><span id="p2info" class="muted small"></span><span class="spacer"></span>
           <select id="p2size" class="small"><option value="s">S</option><option value="m" selected>M</option><option value="l">L</option></select>
-          <label class="small"><input type="checkbox" id="p2trails" checked> trails</label><button class="small" id="p2close">✕</button></div><div id="p2svg"></div></div>
+          <select id="p2show" class="small" title="Which tracks to show"><option value="all">all</option><option value="Home">home</option><option value="Away">away</option><option value="ball">ball</option><option value="sel">selected</option></select>
+          <label class="small"><input type="checkbox" id="p2trails" checked> trails</label><select id="p2trail" class="small" title="Trail length"><option value="2">2 s</option><option value="6" selected>6 s</option><option value="10">10 s</option><option value="20">20 s</option></select><button class="small" id="p2close">✕</button></div><div id="p2svg"></div></div>
         <div id="trackBar" class="hidden"></div>
         <div id="drop">
           <div class="big">🎬</div>
@@ -156,6 +157,7 @@
         <button data-tab="summary">Stats</button>
         <button data-tab="track">Track</button>
         <button data-tab="maps">Maps</button>
+        <button data-tab="pos" title="2D analytics from tracking: team shape, distances, heat maps">Positions</button>
         <button data-tab="season">Season</button>
         <button data-tab="log">Voice log</button>
         <button data-tab="help">Help</button>
@@ -244,6 +246,8 @@
       </div>
 
       <div class="tabpane hidden" id="tab-track"></div>
+
+      <div class="tabpane hidden" id="tab-pos"></div>
 
       <div class="tabpane hidden" id="tab-maps">
         <div class="toolbar">
@@ -337,5 +341,7 @@
 <script src="tracking.js"></script>
 <script src="ai.js"></script>
 <script src="ball.js"></script>
+<script src="editor.js"></script>
+<script src="positions.js"></script>
 </body>
 </html>
