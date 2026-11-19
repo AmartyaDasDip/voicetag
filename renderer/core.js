@@ -424,6 +424,12 @@ function parseUtterance(text, V = VOC, cfg = config) {
     break;
   }
   res.leftover = tokens.slice(i).map(t => t.w);
+  // a control word said straight after a command ("left back cross … undo") still counts
+  if (res.cmds.length && res.leftover.length && res.leftover.length <= 3 && cfg.general.voiceControl) {
+    const lj = res.leftover.join('');
+    let best = null; for (const c of V.control) for (const k of c.keys) { const s = sim(k, lj); if (!best || s > best.s) best = { cmd: c.cmd, s }; }
+    if (best && best.s >= 0.85) { res.trailingControl = best.cmd; res.leftover = []; }
+  }
   if (!res.cmds.length) {
     const lo = parseLabelsOnly(tokens, V, TH);
     if (lo) { res.labelsOnly = lo.items; res.score = lo.score; res.leftover = []; return res; }

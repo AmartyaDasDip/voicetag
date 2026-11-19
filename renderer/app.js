@@ -294,10 +294,11 @@ function tagInstant(code, t, opts = {}) {
 function toggleDuration(code, t, opts = {}, mode = 'toggle') {
   const running = open[code.id];
   if (running && mode !== 'start') {
+    checkpoint();                       // before the phase is closed, so Undo puts it back to "running"
     delete open[code.id];
     const start = Math.min(running.t, t), end = Math.max(running.t, t);
     const ev = makeInstance(code, start, start - (Number(code.lead) || 0), end + (Number(code.lag) || 0), {
-      source: running.source, heard: running.heard, team: running.team,
+      noCheckpoint: true, source: running.source, heard: running.heard, team: running.team,
       player: opts.player || running.player, outcome: opts.outcome || running.outcome,
       labels: (running.labels || []).concat(opts.labels || [])
     });
@@ -386,16 +387,19 @@ $('#btnClear').onclick = () => {
 };
 
 /* ---------------------------------------------------------------- COMMANDS (voice + typed) */
+function runControl(cmd) {
+  if (cmd === 'undo') undo();
+  else if (cmd === 'pause') { if (hasVideo()) video.pause(); else if (live.running) togglePlay(); toast('Paused', 'info'); }
+  else if (cmd === 'play') { if (hasVideo()) video.play(); else if (live.on && !live.running) togglePlay(); toast('Playing', 'info'); }
+  else if (cmd === 'rewind') { seek(-5); toast('Back 5 s', 'info'); }
+}
 function handleParsed(parsed, snapFor, source) {
   const heard = parsed.text;
   if (typeof trackIdentityCommand === 'function' && trackIdentityCommand(heard)) { logVoice(heard, 'Track identity', 'ok'); return; }
-  if (parsed.control) {
-    logVoice(heard, 'Command: ' + parsed.control, 'ok');
-    if (parsed.control === 'undo') undo();
-    else if (parsed.control === 'pause') { if (hasVideo()) video.pause(); else if (live.running) togglePlay(); toast('Paused', 'info'); }
-    else if (parsed.control === 'play') { if (hasVideo()) video.play(); else if (live.on && !live.running) togglePlay(); toast('Playing', 'info'); }
-    else if (parsed.control === 'rewind') { seek(-5); toast('Back 5 s', 'info'); }
-    return;
+  if (parsed.control) { logVoice(heard, 'Command: ' + parsed.control, 'ok'); runControl(parsed.control); return; }
+  // a fragment with words the engine could not make out ("right [unk]") must not change an earlier tag
+  if (parsed.labelsOnly && source === 'voice' && (/\[unk\]/.test(heard) || parsed.score < 0.8)) {
+    logVoice(heard, 'Unclear – ignored (nothing changed)', 'warn'); beep(false); return;
   }
   if (parsed.labelsOnly) {
     const ok = parsed.labelsOnly.map(it => applyLabel(it, true)).every(Boolean);
@@ -433,10 +437,12 @@ function handleParsed(parsed, snapFor, source) {
       msgs.push(eventText(tagInstant(c.code, t, opts)));
     }
   });
+  if (parsed.trailingControl) msgs.push('then ' + parsed.trailingControl);
   const extra = parsed.leftover.length ? '  (ignored: “' + parsed.leftover.join(' ') + '”)' : '';
   logVoice(heard, msgs.join('  |  ') + extra, parsed.leftover.length ? 'warn' : 'ok');
   toast('✓ ' + msgs.join('  |  '), 'ok');
   beep(true);
+  if (parsed.trailingControl) runControl(parsed.trailingControl);
 }
 function runTyped() {
   const txt = $('#cmdInput').value.trim();
