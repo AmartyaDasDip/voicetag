@@ -3,6 +3,9 @@ name: Test assets (voice model for local testing)
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   model:
     runs-on: windows-latest
@@ -18,8 +21,10 @@ jobs:
         if: steps.model-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: ./tools/get-model.ps1
-      - uses: actions/upload-artifact@v4
+      - name: Publish as a temporary pre-release (deleted after testing)
+        uses: softprops/action-gh-release@v2
         with:
-          name: voice-model
-          path: model/model.tar.gz
-          retention-days: 3
+          tag_name: test-assets
+          name: Test assets (temporary)
+          prerelease: true
+          files: model/model.tar.gz
