@@ -15,7 +15,10 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const PALETTE = ['#3ea6ff', '#ff5a5f', '#2ecc71', '#f5b041', '#a66bff', '#1abc9c', '#e67e22', '#ff77c8', '#95a5a6', '#58d68d', '#5dade2', '#f4d03f', '#af7ac5', '#48c9b0', '#dc7633'];
 
 /* ---------------------------------------------------------------- PLATFORM BRIDGE */
-const api = window.api || (() => {
+// In the desktop app `api` is created by preload.js (contextBridge). It must NOT be declared again here:
+// a second top-level declaration of a contextBridge name is a SyntaxError that stops this whole script.
+// Outside the app (browser test mode) a fallback is installed on window instead.
+if (!window.api) window.api = (() => {
   const pick = (accept, multiple) => new Promise(res => {
     const i = document.createElement('input'); i.type = 'file'; i.accept = accept; i.multiple = !!multiple;
     i.onchange = () => res([...i.files]); i.click();
@@ -296,6 +299,13 @@ function buildVocab(cfg) {
   cfg.outcomes.forEach(o => makeKeys(itemSay(o)).forEach(k => V.outcomes.push({ item: o, ...k })));
   cfg.labelGroups.forEach(g => g.labels.forEach(l => makeKeys(itemSay(l)).forEach(k => V.labels.push({ item: { group: g, label: l }, ...k }))));
   cfg.customPhrases.forEach(cp => makeKeys(splitAliases(cp.phrase)).forEach(k => V.custom.push({ item: cp, ...k })));
+  // a bare shirt number ("nine shot", "twenty three pass") also means that player – unless the number word is
+  // already used by something else (e.g. "one" is heard for "won"); home players win when both teams share a number
+  const taken = new Set([...V.codes, ...V.outcomes, ...V.labels, ...V.custom, ...V.players].map(k => k.key));
+  V.control.forEach(c => c.keys.forEach(k => taken.add(k))); [...START_W, ...STOP_W].forEach(w => taken.add(w));
+  const byNum = {};
+  cfg.players.forEach(p => { if (p.num === '' || p.num == null || isNaN(p.num)) return; const n = String(Number(p.num)); if (!byNum[n] || (byNum[n].team !== 'Home' && p.team === 'Home')) byNum[n] = p; });
+  Object.entries(byNum).forEach(([n, p]) => makeKeys([numberWords(Number(n))]).forEach(k => { if (k.key && !taken.has(k.key)) V.players.push({ item: p, ...k, bare: true }); }));
   const hk = (key, v) => { key = String(key || '').trim().toUpperCase(); if (key && !RESERVED_KEYS.has(key) && !V.hotkeys[key]) V.hotkeys[key] = v; };
   cfg.codes.forEach(c => hk(c.hotkey, { kind: 'code', item: c }));
   cfg.outcomes.forEach(o => hk(o.hotkey, { kind: 'outcome', item: o }));

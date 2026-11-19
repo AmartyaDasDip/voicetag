@@ -140,7 +140,7 @@ function setVideo(info, playPath, keepTags) {
   videoInfo = { path: info.path || '', name: info.name, size: info.size, playPath: playPath || '' };
   videoMeta = null;
   if (api.probeVideo && info.path) api.probeVideo(info.path).then(m => { videoMeta = m; if (m && m.warning) toast('⚠ ' + m.warning, 'bad', 6000); updateTime(); }).catch(() => {});
-  document.title = info.name + ' – VoiceTag';
+  document.title = info.name + ' – ' + APP_NAME;
   $('#drop').classList.add('hidden');
   if (keepTags) { renderAll(); return; }   // live session or project: keep the tags already loaded
   sessionKey = 'vt_session_' + (info.path || info.name) + '_' + info.size;
@@ -947,10 +947,13 @@ function autosave() { clearTimeout(autosaveTimer); autosaveTimer = setTimeout(au
 function autosaveNow() {
   try {
     const hasTrack = typeof TR !== 'undefined' && TR.tracks.length;
+    // a project keeps its own crash-safety copy; quick sessions are kept per video (or 'default' without video)
+    const projFile = typeof project !== 'undefined' && project.file ? project.file : null;
+    const key = projFile ? 'vt_proj_' + projFile : sessionKey;
     if (events.length || Object.keys(match.kickoffs).length || hasTrack || (typeof clips !== 'undefined' && clips.length))
-      localStorage.setItem(sessionKey, JSON.stringify({ events, nextId, match, video: videoInfo, savedAt: new Date().toISOString(),
+      localStorage.setItem(key, JSON.stringify({ events, nextId, match, video: videoInfo, savedAt: new Date().toISOString(), projectFile: projFile,
         tracks: hasTrack ? TR.tracks : [], cals: typeof TR !== 'undefined' ? TR.cals : [], trlog: typeof TR !== 'undefined' ? TR.log || [] : [], clips: typeof clips !== 'undefined' ? clips : [] }));
-    else localStorage.removeItem(sessionKey);
+    else localStorage.removeItem(key);
   } catch (e) { /* ignore */ }
 }
 window.addEventListener('beforeunload', autosaveNow);
@@ -993,8 +996,9 @@ document.addEventListener('click', e => { const b = e.target.closest('button'); 
 window.addEventListener('DOMContentLoaded', () => {
   $('#appVer').textContent = 'v' + APP_VERSION;
   try {
+    // the last session without a project is offered on the dashboard ("Continue…"), not loaded silently
     const saved = JSON.parse(localStorage.getItem(sessionKey) || 'null');
-    if (saved && saved.events) { events = saved.events; nextId = saved.nextId || 1; if (saved.match) match = Object.assign(EMPTY_MATCH(), saved.match); }
+    if (saved && !saved.projectFile && ((saved.events && saved.events.length) || (saved.tracks && saved.tracks.length))) window.__lastSession = saved;
   } catch (e) { /* ignore */ }
   renderAll(); renderLog(); setMicUI('off');
   setInterval(() => {

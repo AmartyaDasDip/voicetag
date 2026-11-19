@@ -194,7 +194,12 @@ function renderDashboard() {
     <div class="m">${esc([r.date, r.home && r.away ? r.home + ' vs ' + r.away : '', r.competition, (r.tags || 0) + ' tags'].filter(Boolean).join(' · '))}</div>
     <div class="m">${esc(r.file)}</div></div><button class="small danger x" data-recdel="${esc(r.file)}" title="Remove from list (the files stay)">✕</button></div>`).join('')
     || `<p class="muted">${q ? 'No project matches your search.' : 'No projects yet. Create your first project – or start a quick session to tag straight away.'}</p>`;
-  $('#dashVer').textContent = 'Version ' + APP_VERSION + ' · video analysis, voice tagging & manual tracking';
+  $('#dashVer').textContent = 'Version ' + APP_VERSION + ' · video analysis, voice tagging, AI tracking & 2D analytics';
+  // quick-session button: back to the open project / continue the last session without a project
+  const ls = window.__lastSession, busy = events.length || (typeof TR !== 'undefined' && TR.tracks.length);
+  $('#dQuick').textContent = project.file ? '↩ Back to ' + (project.info.name || 'project') : busy ? '↩ Back to the quick session' : '⚡ Quick session (no project)';
+  const cont = $('#dCont');
+  if (cont) { const show = !project.file && !busy && ls; cont.classList.toggle('hidden', !show); if (show) cont.textContent = `↻ Continue last session (${(ls.events || []).length} tags${ls.video && ls.video.name ? ', ' + ls.video.name : ''})`; }
   if (sysInfo) {
     const mode = sysInfo.ramGB >= 12 ? 'Standard' : 'Light';
     $('#sysInfo').innerHTML = `Windows ${esc(sysInfo.release)} · ${esc(sysInfo.arch)} · ${sysInfo.ramGB} GB RAM · ${sysInfo.cores} CPU threads<br>Performance mode: <b>${mode}</b>${mode === 'Light' ? ' (works fine – AI features will run slower)' : ''}`;
@@ -207,6 +212,14 @@ $('#btnHome').onclick = showDashboard;
 $('#dNew').onclick = () => openProjectForm('new');
 $('#dOpen').onclick = openProjectDialog;
 $('#dQuick').onclick = hideDashboard;
+$('#dCont').onclick = async () => {
+  const s = window.__lastSession; window.__lastSession = null; hideDashboard(); if (!s) return;
+  if (s.video && s.video.path && api.registerMedia) { const r = await api.registerMedia(s.video.path).catch(() => null); if (r) await loadVideo(r, true); else toast('The video of that session was not found: ' + s.video.name, 'bad', 4000); }
+  events = s.events || []; nextId = s.nextId || (Math.max(0, ...events.map(e => e.id)) + 1); if (s.match) match = Object.assign(EMPTY_MATCH(), s.match);
+  if (typeof TR !== 'undefined') { TR.tracks = s.tracks || []; TR.cals = s.cals || []; TR.log = s.trlog || []; }
+  if (typeof clips !== 'undefined') clips = s.clips || [];
+  History.clear(); renderAll(); toast('Session restored', 'ok');
+};
 $('#dSettings').onclick = () => { hideDashboard(); openSettings(); };
 $('#dSearch').oninput = renderDashboard;
 $('#dRecent').addEventListener('click', async e => {
@@ -223,6 +236,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   updateProjectTitle();
   const f = api.pendingFile ? await api.pendingFile() : null;
   if (f) { openProjectFile(f); return; }
-  if (!events.length) showDashboard();
+  showDashboard();
 });
 if (api.onOpenFile) api.onOpenFile(f => openProjectFile(f));

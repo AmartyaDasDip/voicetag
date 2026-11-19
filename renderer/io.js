@@ -214,7 +214,7 @@ async function openProjectData(p, path, askConfig = true) {
   toast('Opened project: ' + evs.length + ' tags', 'info', 3000);
 }
 $('#btnOpenProj').onclick = async () => {
-  const f = await api.openTextFile({ filters: [{ name: 'VoiceTag project', extensions: ['vtproj', 'json'] }] });
+  const f = await api.openTextFile({ filters: [{ name: 'TACTIQ / VoiceTag project', extensions: ['tactiq', 'vtproj', 'json'] }] });
   if (!f) return;
   try {
     const p = JSON.parse(f.text);

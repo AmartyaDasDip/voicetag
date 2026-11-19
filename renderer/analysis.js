@@ -276,7 +276,7 @@ async function renderSeason() {
   bindSel('#seSC', 'searchCode'); bindSel('#seSP', 'searchPlayer'); bindSel('#seSL', 'searchLabel');
   el.querySelector('#seReload').onclick = () => { Season.data = {}; renderSeason(); };
   el.querySelector('#seAdd').onclick = async () => {
-    const files = await api.openTextFiles({ filters: [{ name: 'VoiceTag project', extensions: ['vtproj', 'json'] }] });
+    const files = await api.openTextFiles({ filters: [{ name: 'TACTIQ / VoiceTag project', extensions: ['tactiq', 'vtproj', 'json'] }] });
     let n = 0;
     (files || []).forEach(f => { try { const p = JSON.parse(f.text); if (p.app === 'VoiceTag') { addToLibrary(f.path, p, f.text); n++; } } catch (e) { /* ignore */ } });
     toast(n + ' match(es) added', 'info'); renderSeason();
