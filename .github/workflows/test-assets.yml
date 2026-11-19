@@ -2,12 +2,17 @@ name: Test assets (voice model for local testing)
 
 on:
   workflow_dispatch:
+    inputs:
+      action:
+        description: publish or delete
+        default: publish
 
 permissions:
   contents: write
 
 jobs:
   model:
+    if: ${{ inputs.action != 'delete' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,10 +26,18 @@ jobs:
         if: steps.model-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: ./tools/get-model.ps1
-      - name: Publish as a temporary pre-release (deleted after testing)
+      - name: Publish as a temporary pre-release (delete it afterwards)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: test-assets
           name: Test assets (temporary)
           prerelease: true
           files: model/model.tar.gz
+  cleanup:
+    if: ${{ inputs.action == 'delete' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete the temporary release and its tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete test-assets --repo ${{ github.repository }} --cleanup-tag --yes || true
