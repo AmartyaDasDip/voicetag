@@ -1,0 +1,25 @@
+name: Test assets (voice model for local testing)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  model:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore voice model from cache
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: model/model.tar.gz
+          key: vosk-small-en-us-0.15-${{ hashFiles('tools/get-model.ps1') }}
+      - name: Download voice model
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: ./tools/get-model.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voice-model
+          path: model/model.tar.gz
+          retention-days: 3

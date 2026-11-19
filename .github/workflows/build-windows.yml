@@ -3,6 +3,11 @@ name: Build Windows installer
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'testdata/**'
+      - '.github/workflows/test-assets.yml'
+      - '.github/workflows/export-models.yml'
+      - 'engine/models/EXPORT_REQUEST.txt'
   workflow_dispatch:
 
 permissions:
