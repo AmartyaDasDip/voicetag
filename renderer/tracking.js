@@ -105,6 +105,8 @@ const carryErr = (c, d) => 0.2 * Math.hypot(d[0], d[1] * 0.56) * metresPerWidth(
 const CARRY_MAX_ERR = 4;   // metres – beyond this a carried calibration is not used
 // calibration valid at time t (segment = from this calibration until the next one)
 function calAt(t) {
+  // close-ups, replays and other shots never get a pitch calibration (segment-based calibration, phase 0.8)
+  if (typeof shotAt === 'function' && TR.shots && TR.shots.length) { const sh = shotAt(t); if (sh && !trackableShot(sh)) return null; }
   const cs = sortedCals();
   let i = -1;
   for (let k = 0; k < cs.length; k++) if (cs[k].t <= t + 1e-6) i = k;
@@ -120,6 +122,8 @@ function calAt(t) {
   const c = cs[i];
   if (c.type === 'none' || !c.H) return null;
   const n = cs[i + 1];
+  // a calibration never continues across a camera cut (each shot needs its own)
+  const cutAfterC = typeof cutBetween === 'function' && cutBetween(c.t, t, 0);
   if (TR.settings.followCam !== false && TR.camera && TR.camera.length) {
     const ct = camAt(t);
     if (ct) {
@@ -137,13 +141,56 @@ function calAt(t) {
       if (B && B.err <= CARRY_MAX_ERR) return { H: B.H, cal: n, carried: true, err: B.err + 0.15 };
     }
   }
-  if (c.blend && n && n.type !== 'none' && n.H && n.t > c.t) {
+  if (cutAfterC) return null;
+  if (c.blend && n && n.type !== 'none' && n.H && n.t > c.t && !cutBetween(c.t, n.t)) {
     const a = clamp((t - c.t) / (n.t - c.t), 0, 1);
     return { H: c.H.map((v, k) => v * (1 - a) + n.H[k] * a), cal: c, blended: true };
   }
   return { H: c.H, cal: c };
 }
 function toPitch(t, x, y) { const c = calAt(t); if (!c) return null; const r = applyH(c.H, x, y); if (!r || r[2] <= 0 && Math.sign(applyH(c.H, 0.5, 0.5)[2]) > 0) return null; return [r[0], r[1]]; }
+
+/* ---------------------------------------------------------------- VISIBLE PART OF THE PITCH (phase 0.8)
+   A broadcast camera shows only part of the pitch. For a calibration we test 2 m × 2 m cells of the pitch:
+   a cell is "in view" when its centre lands inside the picture. Players outside the view are simply missing,
+   so team width/length and heat maps must say how much of the pitch they could see. */
+const VIEW_CELL = 2, viewCache = new Map();
+function viewOf(H, cell = VIEW_CELL) {
+  const { L, W } = pitchDims(), key = cell + ':' + L + 'x' + W + ':' + H.map(v => v.toPrecision(5)).join(',');
+  if (viewCache.has(key)) return viewCache.get(key);
+  const Hi = inv3(H); if (!Hi) return null;
+  const nx = Math.ceil(L / cell), ny = Math.ceil(W / cell);
+  const p0 = applyH(H, 0.5, 0.8), r0 = p0 && applyH(Hi, p0[0], p0[1]); if (!r0) return null;
+  const s0 = Math.sign(r0[2]), rows = []; let n = 0;
+  for (let j = 0; j < ny; j++) {
+    const y = Math.min(W, (j + 0.5) * cell), row = [];
+    let run = null;
+    for (let i = 0; i < nx; i++) {
+      const x = Math.min(L, (i + 0.5) * cell), r = applyH(Hi, x, y);
+      const vis = !!r && Math.sign(r[2]) === s0 && r[0] >= 0 && r[0] <= 1 && r[1] >= 0 && r[1] <= 1;
+      if (vis) { n++; if (!run) row.push(run = [i, i]); else run[1] = i; } else run = null;
+    }
+    rows.push(row);
+  }
+  const v = { frac: n / (nx * ny), rows, nx, ny, cell };
+  if (viewCache.size > 400) viewCache.clear();
+  viewCache.set(key, v); return v;
+}
+function viewAt(t) { const c = calAt(t); return c ? viewOf(c.H) : null; }
+// near the edge of the picture: the team probably continues outside the view
+const atPictureEdge = q => q && q.x != null && (q.x < 0.03 || q.x > 0.97 || q.y < 0.03 || q.y > 0.97);
+// SVG shading of the part of the pitch that is NOT in the picture
+function viewShadeSvg(v, L, W) {
+  if (!v) return '';
+  let d = '';
+  v.rows.forEach((row, j) => {
+    const y0 = j * v.cell, h = Math.min(W, y0 + v.cell) - y0; let x = 0;
+    const gap = (a, b) => { const x0 = a * v.cell, x1 = Math.min(L, b * v.cell); if (x1 > x0) d += `M${x0},${y0}h${x1 - x0}v${h}h${-(x1 - x0)}z`; };
+    row.forEach(([a, b]) => { gap(x, a); x = b + 1; });
+    gap(x, v.nx);
+  });
+  return d ? `<path d="${d}" fill="#000" opacity=".38"/>` : '';
+}
 
 /* ---------------------------------------------------------------- TRACK DATA */
 function teamColor(team) { return team === 'Away' ? (config.general.awayColor || '#ff5a5f') : team === 'Neutral' ? '#bbbbbb' : (config.general.homeColor || '#3ea6ff'); }
@@ -397,7 +444,7 @@ function renderTrackTab() {
     const l = TR.tracks.filter(x => (x.kind === 'ball' || x.kind === 'ref' ? 'Neutral' : x.team) === team);
     if (!l.length) return '';
     return `<h4>${esc(name)}</h4>` + l.map(x => `<div class="trk ${x.id === TR.sel ? 'sel' : ''}" data-tk="${x.id}"><span class="dot" style="background:${esc(trackColor(x))}"></span>
-      <span class="lb">${esc(trackLabel(x))}${x.ai ? ' <span class="badge aib">AI</span>' : ''}</span><span class="cov">${esc(coverage(x))}</span>
+      <span class="lb">${esc(trackLabel(x))}${x.ai ? ' <span class="badge aib">AI</span>' : ''}${typeof afterCutTrack === 'function' && afterCutTrack(x) ? ' <span class="badge cut" title="Starts after a camera cut – identity not confirmed">after cut</span>' : ''}</span><span class="cov">${esc(coverage(x))}</span>
       <button class="small" data-tkedit="${x.id}" title="Edit">✎</button><button class="small danger" data-tkdel="${x.id}" title="Delete track">✕</button></div>`).join('');
   }).join('');
   const cals = sortedCals().map(c => { const q = calQuality(c); return `<div class="trk" data-cal="${c.id}"><span class="lb">${fmtTime(c.t)} ${c.type === 'none' ? '⛔ no calibration (cut / close-up)' : '🎯 ' + (c.points || []).length + ' points' + (c.blend ? ' · blends to next' : '')}</span>
@@ -416,6 +463,7 @@ function renderTrackTab() {
       <div class="toolbar" style="margin-top:6px"><button class="small" data-vis="occ">Occluded here</button><button class="small" data-vis="out">Out of frame here</button><button class="small" data-vis="unk">Unknown here</button>
       <button class="small" id="tkHold" title="Copy the last known position to this frame (player standing still)">⇢ Same as last</button><button class="small" id="tkDelPt">Delete point</button></div>
       <div class="toolbar"><button class="small" id="tkPrevK">◀ prev keyframe</button><button class="small" id="tkNextK">next keyframe ▶</button><button class="small" id="tkBack">− step</button><button class="small" id="tkFwd">+ step</button></div></div>` : ''}
+    <div id="shotBox"></div>
     <div id="edBox"></div>
     <div id="aiBox"></div>
     <div id="ballBox"></div>
@@ -426,7 +474,7 @@ function renderTrackTab() {
       const now = !c ? '<span class="badge poor">none at this moment</span>' : c.carried ? `<span class="badge ${c.err < 1.5 ? 'good' : 'ok'}">↔ follows the camera${c.between ? ' (between ' + fmtTime(c.cal.t) + ' and ' + fmtTime(c.between.t) + ')' : ' from ' + fmtTime(c.cal.t)} · ±${c.err.toFixed(1)} m</span>` : `<span class="badge good">🎯 ${c.blended ? 'blended' : 'set'} at ${fmtTime(c.cal.t)}</span>`;
       return `<div class="toolbar small">At ${fmtTime(t)}: ${now}
         <label title="The AI measures how the camera pans; a calibration is carried along with it (and blended between two calibrations). Run 🤖 Auto-detect over the part you want to use."><input type="checkbox" id="tkFollow" ${TR.settings.followCam !== false ? 'checked' : ''} ${camOk ? '' : 'disabled'}> calibration follows the camera ${camOk ? '' : '(after an AI run)'}</label></div>`; })()}
-    <p class="small muted">Click 4+ known pitch points (corners, box, halfway line…) on a video frame. Each calibration is valid from its time until the next one. Add a new one when the camera moves or cuts; use ⛔ for close-ups or replays.</p>
+    <p class="small muted">Click 4+ known pitch points (corners, box, halfway line…) on a video frame. Each calibration is valid from its time until the next one or the next camera cut. Add a new one when the camera moves and in every shot after a cut (📺 Calibrate next shot); use ⛔ for close-ups or replays.</p>
     <div class="toolbar"><button class="small primary" id="tkCal">🎯 Calibrate at this frame</button><button class="small" id="tkNoCal">⛔ No calibration from here</button></div>
     ${cals || '<p class="muted small">No calibration yet.</p>'}
     <h4>Export</h4><div class="toolbar"><button class="small" id="tkCsv">Tracking CSV</button><button class="small" id="tkJson">Tracking JSON</button></div>`;
@@ -463,6 +511,7 @@ function renderTrackTab() {
   if (typeof renderAiBox === 'function') renderAiBox();
   if (typeof renderBallPanel === 'function') renderBallPanel();
   if (typeof renderEditorBox === 'function') renderEditorBox();
+  if (typeof renderShotsBox === 'function') renderShotsBox();
 }
 function addSquadTracks() {
   const sq = Object.keys(match.squad || {}).length ? config.players.filter(p => match.squad[p.id] && match.squad[p.id] !== 'out') : config.players;
@@ -616,8 +665,10 @@ function render2D(force) {
     else inner += `<g opacity="${interp ? .6 : 1}"><circle cx="${m[0].toFixed(2)}" cy="${m[1].toFixed(2)}" r="1.7" fill="${esc(col)}" stroke="${tk.id === TR.sel ? '#2ecc71' : '#000'}" stroke-width="${tk.id === TR.sel ? .6 : .25}" ${interp ? 'stroke-dasharray=".6 .4"' : ''}/>
       <text x="${m[0].toFixed(2)}" y="${(m[1] + 0.75).toFixed(2)}" font-size="2" text-anchor="middle" fill="#fff" font-weight="700">${esc(trackShort(tk))}</text></g>`;
   });
-  $('#p2svg').innerHTML = pitchSvgFull(L, W, inner) + (c ? '' : `<div class="small warn" style="margin-top:3px">No pitch calibration at ${fmtTime(t)} – positions can’t be placed on the pitch.</div>`);
-  $('#p2info').textContent = total ? `${shown}/${total} placed · ${fmtTime(t)}` : 'no tracks yet';
+  const view = c && TR.settings.showView !== false ? viewOf(c.H) : null;
+  const sh = typeof shotAt === 'function' && TR.shots && TR.shots.length ? shotAt(t) : null;
+  $('#p2svg').innerHTML = pitchSvgFull(L, W, viewShadeSvg(view, L, W) + inner) + (c ? '' : `<div class="small warn" style="margin-top:3px">${sh && !trackableShot(sh) ? `${esc(SHOT_TYPES[sh.type] ? SHOT_TYPES[sh.type][0] : sh.type)} shot at ${fmtTime(t)} – not used for positions.` : `No pitch calibration at ${fmtTime(t)} – positions can’t be placed on the pitch.`}</div>`);
+  $('#p2info').textContent = (total ? `${shown}/${total} placed · ${fmtTime(t)}` : 'no tracks yet') + (view ? ` · ${Math.round(view.frac * 100)}% of pitch in view` : '');
 }
 $('#btn2D').onclick = () => { const b = $('#pitch2d'); b.classList.toggle('hidden'); render2D(true); };
 $('#p2close').onclick = () => $('#pitch2d').classList.add('hidden');

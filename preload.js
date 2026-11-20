@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('api', {
   systemInfo: () => ipcRenderer.invoke('system-info'),
   aiInfo: () => ipcRenderer.invoke('ai-info'),
   aiAnalyse: o => ipcRenderer.invoke('ai-analyse', o),
+  aiScan: o => ipcRenderer.invoke('ai-analyse', Object.assign({}, o, { scan: true })),
   aiCancel: () => ipcRenderer.invoke('ai-cancel'),
   onAiProgress: cb => { ipcRenderer.removeAllListeners('ai-progress'); ipcRenderer.on('ai-progress', (e, p) => cb(p)); },
   pendingFile: () => ipcRenderer.invoke('pending-file'),

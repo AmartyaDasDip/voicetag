@@ -1,5 +1,31 @@
 # TACTIQ ANALYST – changelog
 
+## 2.5.0 – roadmap phase 0.8: broadcast footage support
+
+TV / broadcast footage cuts between the main camera, close-ups, replays and crowd shots. 2.5.0 handles this.
+Tested in the real desktop app with a 21 s broadcast-style clip (wide – close-up – slow replay – wide – crowd):
+39 automated checks, plus the full regression suite.
+
+### New
+- **📺 Scan camera shots** (Track tab): finds every camera cut and recognises each shot as wide, medium, close-up or
+  other (crowd, bench, graphics). Test clip: all 4 cuts found within one frame, all shot types right; about 2.5×
+  real time on 2 processor cores. The scan also measures the camera movement of the whole video, so calibrations
+  follow the camera everywhere, not only where the AI ran.
+- **Shot list** with a coloured strip (and a bar showing where the pitch is calibrated): change a shot's type, mark
+  replays (a slow-motion replay from the main camera can't be told apart automatically), **⤒ join** a wrongly found
+  cut, 🎯 calibrate a shot, **🎯 Calibrate next shot** jumps to the next wide shot that still needs a calibration.
+- **Segment-based calibration:** a calibration never continues across a camera cut, and close-ups, replays and other
+  shots never get one (positions there are not placed on the pitch instead of being placed wrongly).
+- **AI on wide shots only:** 🤖 Auto-detect can skip close-ups, replays and other shots (runs the wide / medium
+  shots one after another). The AI's own cut detection refines the shot boundaries to the exact frame.
+- **Identity across cuts:** tracks always end at a cut and are never joined automatically across one. A track that
+  starts after a cut is marked "after cut"; the editor lists who it may be from before the cut (nearest by pitch
+  position) – one click joins, Ctrl+Z undoes.
+- **Partial pitch view:** the 2D view darkens the part of the pitch that is not in the picture and shows the share in
+  view. The Positions tab and PDF report state how much of the pitch was visible on average, warn when players were
+  at the edge of the picture (team width / length then probably underestimated), and say how much of the video was
+  usable camera footage. Close-ups and replays are left out of team shape, distance and heat maps.
+
 ## 2.4.0 – full end-to-end test with the Spain v England clips, bug fixes, calibration that follows the camera
 
 Tested by driving the real desktop app (Electron, real ffmpeg, real AI engine, real offline voice model fed with

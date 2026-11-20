@@ -18,7 +18,7 @@ function renderAiBox() {
     const pct = p ? Math.round(p.done / Math.max(1, p.total) * 100) : 0;
     box.innerHTML = `<div class="exportbox" style="margin:0 0 10px"><b>🤖 AI is analysing the video…</b>
       <div class="aibar"><div style="width:${pct}%"></div></div>
-      <div class="small muted">${p ? `${p.done} / ${p.total} frames · ${p.speed.toFixed(1)} frames/s · about ${aiDur(p.eta)} left` : 'Starting the AI engine…'}</div>
+      <div class="small muted">${p && p.part ? `part ${p.part} · ` : ''}${p ? `${p.done} / ${p.total} frames · ${p.speed.toFixed(1)} frames/s · about ${aiDur(p.eta)} left` : 'Starting the AI engine…'}</div>
       <div class="toolbar"><button class="small danger" id="aiCancel">Cancel</button></div></div>`;
     box.querySelector('#aiCancel').onclick = () => api.aiCancel();
     return;
@@ -52,6 +52,7 @@ async function aiStartDialog() {
       ${info.accurate ? `<option value="accurate" ${def === 'accurate' ? 'selected' : ''}>Accurate (bigger model – finds far-away players better)</option>` : ''}</select></label>
     <label class="blk">Look at <select id="aiStride"><option value="1">every frame (slowest, smoothest)</option><option value="2" selected>every 2nd frame (recommended)</option><option value="3">every 3rd frame</option><option value="5">every 5th frame (fastest)</option></select></label>
     <label class="blk">Ball <select id="aiBallMode"><option value="zoom">Find the ball – zoom in for a second look (best, about 2× slower)</option><option value="normal">Find the ball – one look (faster)</option><option value="off">Players only</option></select></label>
+    ${(TR.shots || []).length ? `<label class="blk"><input type="checkbox" id="aiWide" checked> Only wide / medium camera shots – skip close-ups, replays and other shots (from the 📺 shot list)</label>` : ''}
     <label class="blk"><input type="checkbox" id="aiCpu"> Use the processor only (tick this if the graphics card causes problems)</label>
     <p class="small muted">This PC: ${info.ramGB} GB RAM, ${info.cores} processor threads. ${info.gpu ? 'The graphics card is used automatically when possible (DirectX 12).' : ''} You can keep tagging while it runs.</p>`;
   let opts = null;
@@ -61,18 +62,60 @@ async function aiStartDialog() {
     if (mode === 'io') { start = clipIO.in; d = clipIO.out - clipIO.in; }
     if (mode === 'all') { start = 0; d = dur; }
     d = Math.min(d, Math.max(0.5, dur - start));
-    opts = { start: Math.round(start * 1000) / 1000, duration: Math.round(d * 1000) / 1000, quality: b.querySelector('#aiQ').value, stride: Number(b.querySelector('#aiStride').value), cpuOnly: b.querySelector('#aiCpu').checked, ball: b.querySelector('#aiBallMode').value };
+    opts = { start: Math.round(start * 1000) / 1000, duration: Math.round(d * 1000) / 1000, quality: b.querySelector('#aiQ').value, stride: Number(b.querySelector('#aiStride').value), cpuOnly: b.querySelector('#aiCpu').checked, ball: b.querySelector('#aiBallMode').value, wideOnly: !!(b.querySelector('#aiWide') && b.querySelector('#aiWide').checked) };
   } }]);
   if (r !== 'go' || !opts) return;
   aiRun(opts);
 }
 
+// the selected range, cut into the usable (wide / medium) camera shots when asked
+function aiPieces(opts) {
+  const a = opts.start, b = opts.start + opts.duration;
+  if (!opts.wideOnly || !(TR.shots || []).length) return [[a, b]];
+  const out = [];
+  sortedShots().forEach(sh => {
+    if (!trackableShot(sh)) return;
+    const s = Math.max(a, sh.t0), e = Math.min(b, sh.t1);
+    if (e - s < 0.5) return;
+    const last = out[out.length - 1];
+    if (last && s - last[1] < 0.05) last[1] = e; else out.push([s, e]);
+  });
+  return out;
+}
+async function aiRunPieces(opts) {
+  const pieces = aiPieces(opts), base = { video: videoInfo.playPath || videoInfo.path };
+  if (!pieces.length) return { ok: false, error: 'There is no wide or medium camera shot in the selected range.' };
+  if (pieces.length === 1 && !opts.wideOnly) return api.aiAnalyse(Object.assign(base, opts));
+  const results = [];
+  for (let i = 0; i < pieces.length; i++) {
+    api.onAiProgress(p => { AI.progress = Object.assign({}, p, { part: (i + 1) + '/' + pieces.length }); renderAiBox(); });
+    const r = await api.aiAnalyse(Object.assign({}, base, opts, { start: pieces[i][0], duration: pieces[i][1] - pieces[i][0] }));
+    if (!r || !r.ok) return r;
+    results.push(r);
+  }
+  // one combined result: track ids and camera shots kept apart per piece
+  const first = results[0], m = first.meta;
+  const comb = { ok: true, tracks: [], ball: [], camera: [], cutTimes: [], clusters: first.clusters, ballStats: Object.assign({}, first.ballStats, { found: 0, frames: 0, fromZoom: 0 }),
+    meta: Object.assign({}, m, { start: opts.start, duration: opts.duration, frames: 0, seconds: 0, pieces: pieces.length }) };
+  results.forEach((r, i) => {
+    r.tracks.forEach(t => comb.tracks.push(Object.assign({}, t, { id: (i + 1) * 100000 + t.id })));
+    comb.ball.push(...r.ball); comb.cutTimes.push(...(r.cutTimes || []));
+    if (i) comb.cutTimes.push(pieces[i][0]);
+    (r.camera || []).forEach(p => comb.camera.push([p[0], p[1], p[2], 'p' + i + '_' + (p[3] || 0)]));
+    comb.meta.frames += r.meta.frames; comb.meta.seconds += r.meta.seconds;
+    if (r.ballStats) { comb.ballStats.found += r.ballStats.found; comb.ballStats.frames += r.ballStats.frames; comb.ballStats.fromZoom += r.ballStats.fromZoom || 0; }
+  });
+  comb.meta.seconds = Math.round(comb.meta.seconds * 10) / 10;
+  comb.meta.framesPerSecond = Math.round(comb.meta.frames / Math.max(0.1, comb.meta.seconds) * 10) / 10;
+  comb.ballStats.coverage = Math.round(comb.ballStats.found / Math.max(1, comb.ballStats.frames) * 1000) / 10;
+  return comb;
+}
 async function aiRun(opts) {
   AI.running = true; AI.progress = null; renderAiBox();
   api.onAiProgress(p => { AI.progress = p; renderAiBox(); });
   toast('AI analysis started – you can keep working', 'info', 2500);
   let res;
-  try { res = await api.aiAnalyse(Object.assign({ video: videoInfo.playPath || videoInfo.path }, opts)); }
+  try { res = await aiRunPieces(opts); }
   catch (e) { res = { ok: false, error: String(e && e.message || e) }; }
   AI.running = false; AI.progress = null; renderTrackTab();
   if (!res || !res.ok) { if (res && res.error === 'cancelled') toast('AI analysis cancelled', 'info'); else Dlg.open('AI analysis failed', `<p>${esc(res && res.error || 'Unknown error')}</p><p class="small muted">Try “Use the processor only”, the Fast model, or a shorter range.</p>`); return; }
@@ -145,7 +188,7 @@ function aiImport(res, ch) {
     if (tr.points[tr.points.length - 1].t - tr.points[0].t < ch.min) { dropped++; return; }
     if (ch.off) { const s = aiOffPitchShare(tr); if (s != null && s > 0.6) { dropped++; return; } }
     const tk = newTrack({ team: team === 'Neutral' ? 'Neutral' : team, kind: team === 'Neutral' ? 'other' : 'player', label: label(team),
-      ai: { run, id: tr.id, colour: tr.colour } });
+      ai: { run, id: tr.id, colour: tr.colour, interrupted: !!tr.interrupted, afterCut: !!tr.afterCut } });
     if (team === 'Neutral') tk.color = rgbHex(tr.colour);
     tk.points = tr.points.map(p => ({ t: qt(p.t), x: p.x, y: p.y, src: 'ai', vis: 'v', conf: p.conf }));
     added++;
@@ -159,6 +202,14 @@ function aiImport(res, ch) {
     const fd = frameDur();
     const add = res.ball.map(b => ({ t: qt(b.t), x: b.x, y: b.y, src: 'ai', vis: 'v', conf: b.conf })).filter(p => !keep.some(q => Math.abs(q.t - p.t) < fd * 0.51));
     tk.points = keep.concat(add).sort((a, b) => a.t - b.t);
+  }
+  // camera cuts seen by this run: tracks never continue silently across them
+  if (res.cutTimes && res.cutTimes.length) TR.cuts = [...new Set((TR.cuts || []).filter(c => c < t0 - 0.01 || c > t1 + 0.01).concat(res.cutTimes.map(c => Math.round(c * 1000) / 1000)))].sort((a, b) => a - b);
+  // the AI looks at the cut frame by frame: move the shot boundaries of the (coarser) shot scan onto it
+  if (res.cutTimes && res.cutTimes.length && (TR.shots || []).length) {
+    const s = sortedShots();
+    res.cutTimes.forEach(c => { for (let i = 1; i < s.length; i++) if (c < s[i].t0 && s[i].t0 - c < 0.2 && c > s[i - 1].t0 + 0.2) { s[i - 1].t1 = c; s[i].t0 = c; } });
+    TR.shots = s;
   }
   // camera movement of this run (one segment per shot) – lets calibrations follow the camera
   if (res.camera && res.camera.length) {

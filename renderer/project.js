@@ -163,7 +163,7 @@ async function openProjectForm(mode) {   // mode: 'new' | 'edit' | 'save' | 'sav
   if (mode === 'edit') { checkpoint(); project.info = i; syncProjectToApp(); markDirty(); renderAll(); return true; }
   if (mode === 'new') {
     const keepTags = events.length && true;
-    if (!keepTags) { events = []; nextId = 1; open = {}; match = EMPTY_MATCH(); TR.tracks = []; TR.cals = []; TR.camera = []; TR.log = []; clips = []; }
+    if (!keepTags) { events = []; nextId = 1; open = {}; match = EMPTY_MATCH(); TR.tracks = []; TR.cals = []; TR.camera = []; TR.log = []; TR.shots = []; TR.cuts = []; clips = []; }
     History.clear();
   }
   project.info = i;
@@ -216,7 +216,7 @@ $('#dCont').onclick = async () => {
   const s = window.__lastSession; window.__lastSession = null; hideDashboard(); if (!s) return;
   if (s.video && s.video.path && api.registerMedia) { const r = await api.registerMedia(s.video.path).catch(() => null); if (r) await loadVideo(r, true); else toast('The video of that session was not found: ' + s.video.name, 'bad', 4000); }
   events = s.events || []; nextId = s.nextId || (Math.max(0, ...events.map(e => e.id)) + 1); if (s.match) match = Object.assign(EMPTY_MATCH(), s.match);
-  if (typeof TR !== 'undefined') { TR.tracks = s.tracks || []; TR.cals = s.cals || []; TR.log = s.trlog || []; TR.camera = s.camera || []; }
+  if (typeof TR !== 'undefined') { TR.tracks = s.tracks || []; TR.cals = s.cals || []; TR.log = s.trlog || []; TR.camera = s.camera || []; TR.shots = s.shots || []; TR.cuts = s.cuts || []; }
   if (typeof clips !== 'undefined') clips = s.clips || [];
   History.clear(); renderAll(); toast('Session restored', 'ok');
 };

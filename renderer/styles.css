@@ -237,3 +237,13 @@ button.chip { border-radius: 12px; padding: 1px 8px; margin: 2px 2px 2px 0; }
 @media (max-width: 1500px) { .grid2 { grid-template-columns: 1fr; } }
 .warnbox { border-left: 3px solid #f5b041; }
 svg.series { width: 100%; max-height: 130px; display: block; margin: 4px 0 8px; background: rgba(0,0,0,.2); border-radius: 4px; }
+
+/* camera shots */
+#shotStrip { width: 100%; height: 22px; display: block; cursor: pointer; margin: 4px 0; }
+.shotlist { max-height: 210px; overflow: auto; border-top: 1px solid rgba(255,255,255,.08); margin-top: 4px; }
+.shotrow { display: flex; align-items: center; gap: 6px; padding: 2px 0; font-size: 12px; }
+.shotrow.sel { background: rgba(46,204,113,.12); }
+.shotrow a { cursor: pointer; text-decoration: underline dotted; min-width: 92px; }
+.shotrow select { font-size: 11px; padding: 1px 2px; }
+.badge.cut { background: #8e44ad; color: #fff; font-size: 10px; padding: 0 4px; }
+button.chip.cutchip { border-color: #8e44ad; }

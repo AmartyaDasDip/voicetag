@@ -346,7 +346,7 @@ ipcMain.handle('ai-analyse', async (e, o) => {
   const pr = await exporter.probe(ff, o.video);
   if (!pr.width || !pr.height) return { ok: false, error: 'Could not read the video size.' };
   const start = Math.max(0, Number(o.start) || 0);
-  const duration = Math.max(0.5, Math.min(Number(o.duration) || 10, (pr.duration || 1e9) - start));
+  const duration = Math.max(0.5, Math.min(Number(o.duration) || (o.scan ? 1e9 : 10), (pr.duration || 1e9) - start));
   const script = path.join(__dirname, 'engine', 'worker.js').replace('app.asar' + path.sep, 'app.asar.unpacked' + path.sep);
   return new Promise(resolve => {
     let done = false;
@@ -362,9 +362,9 @@ ipcMain.handle('ai-analyse', async (e, o) => {
       else if (m.type === 'error') finish({ ok: false, error: m.error });
     });
     aiProc.on('exit', code => finish({ ok: false, error: 'The AI engine stopped unexpectedly (code ' + code + '). ' + errText.slice(-400) }));
-    aiProc.postMessage({ cmd: 'run', opts: { ffmpeg: ff, video: o.video, start, duration, srcW: pr.width, srcH: pr.height, fps: pr.fps || 25,
+    aiProc.postMessage({ cmd: o.scan ? 'scan' : 'run', opts: { ffmpeg: ff, video: o.video, start, duration, srcW: pr.width, srcH: pr.height, fps: pr.fps || 25,
       model, stride: Math.max(1, Math.min(5, Number(o.stride) || 2)), prefer: o.cpuOnly ? 'cpu' : 'auto',
-      ball: ['off', 'normal', 'zoom'].includes(o.ball) ? o.ball : 'normal' } });
+      ball: ['off', 'normal', 'zoom'].includes(o.ball) ? o.ball : 'normal', sampleEvery: Number(o.sampleEvery) || 2 } });
   });
 });
 ipcMain.handle('ai-cancel', async () => { if (aiProc) { try { aiProc.postMessage({ cmd: 'cancel' }); } catch (e) { /* gone */ } setTimeout(() => { try { aiProc && aiProc.kill(); } catch (e) { /* gone */ } }, 1500); } return true; });

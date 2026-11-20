@@ -25,13 +25,13 @@ const History = {
   past: [], future: [], max: 60,
   snap() {
     return JSON.stringify({ events, nextId, match, open, curTeam,
-      tracks: typeof TR !== 'undefined' ? TR.tracks : [], cals: typeof TR !== 'undefined' ? TR.cals : [], trlog: typeof TR !== 'undefined' ? TR.log || [] : [], camera: typeof TR !== 'undefined' ? TR.camera || [] : [], clips: typeof clips !== 'undefined' ? clips : [] });
+      tracks: typeof TR !== 'undefined' ? TR.tracks : [], cals: typeof TR !== 'undefined' ? TR.cals : [], trlog: typeof TR !== 'undefined' ? TR.log || [] : [], camera: typeof TR !== 'undefined' ? TR.camera || [] : [], shots: typeof TR !== 'undefined' ? TR.shots || [] : [], cuts: typeof TR !== 'undefined' ? TR.cuts || [] : [], clips: typeof clips !== 'undefined' ? clips : [] });
   },
   checkpoint() { this.past.push(this.snap()); if (this.past.length > this.max) this.past.shift(); this.future = []; markDirty(); },
   restore(str) {
     const o = JSON.parse(str);
     events = o.events; nextId = o.nextId; match = o.match; open = o.open || {}; curTeam = o.curTeam || curTeam;
-    if (typeof TR !== 'undefined') { TR.tracks = o.tracks || []; TR.cals = o.cals || []; TR.log = o.trlog || []; TR.camera = o.camera || TR.camera || []; }
+    if (typeof TR !== 'undefined') { TR.tracks = o.tracks || []; TR.cals = o.cals || []; TR.log = o.trlog || []; TR.camera = o.camera || TR.camera || []; TR.shots = o.shots || TR.shots || []; TR.cuts = o.cuts || TR.cuts || []; }
     if (typeof clips !== 'undefined') clips = o.clips || [];
     locAsk = null; renderAll(); autosave(); markDirty();
   },
@@ -145,7 +145,7 @@ function setVideo(info, playPath, keepTags) {
   if (keepTags) { renderAll(); return; }   // live session or project: keep the tags already loaded
   sessionKey = 'vt_session_' + (info.path || info.name) + '_' + info.size;
   events = []; undoStack = []; nextId = 1; open = {}; target = { kind: null, id: null, seq: 0 }; match = EMPTY_MATCH(); History.clear();
-  if (typeof TR !== 'undefined') { TR.tracks = []; TR.cals = []; TR.log = []; TR.camera = []; }
+  if (typeof TR !== 'undefined') { TR.tracks = []; TR.cals = []; TR.log = []; TR.camera = []; TR.shots = []; TR.cuts = []; }
   if (typeof clips !== 'undefined') clips = [];
   try {
     const saved = JSON.parse(localStorage.getItem(sessionKey) || 'null');
@@ -153,7 +153,7 @@ function setVideo(info, playPath, keepTags) {
         confirm('Found ' + saved.events.length + ' saved tags for "' + info.name + '".\n\nOK = restore them\nCancel = start a fresh session')) {
       events = saved.events; nextId = saved.nextId || (Math.max(0, ...events.map(e => e.id)) + 1);
       if (saved.match) match = Object.assign(EMPTY_MATCH(), saved.match);
-      if (saved.tracks && typeof TR !== 'undefined') { TR.tracks = saved.tracks; TR.cals = saved.cals || []; TR.log = saved.trlog || []; TR.camera = saved.camera || []; }
+      if (saved.tracks && typeof TR !== 'undefined') { TR.tracks = saved.tracks; TR.cals = saved.cals || []; TR.log = saved.trlog || []; TR.camera = saved.camera || []; TR.shots = saved.shots || []; TR.cuts = saved.cuts || []; }
       if (saved.clips && typeof clips !== 'undefined') clips = saved.clips;
     }
   } catch (e) { /* ignore */ }
@@ -879,7 +879,7 @@ function renderHelp() {
     <h3>Projects</h3><p>🏠 opens the dashboard. A project is a folder with the project file, backups (every 10 min), screenshots, clips, reports and tracking data. It saves itself every minute.</p>
     <h3>Manual tracking (Track tab)</h3>
     <ol><li>Add tracks: <b>+ Players from squad</b>, unknown players, the ball or a referee.</li>
-    <li><b>Calibrate</b>: pause on a frame, 🎯 Calibrate, click 4–6+ known pitch points. Add a new calibration when the camera moves; ⛔ for close-ups / replays.</li>
+    <li><b>Calibrate</b>: pause on a frame, 🎯 Calibrate, click 4–6+ known pitch points. Add a new calibration when the camera moves, and one per shot after a camera cut; ⛔ for close-ups / replays (or mark them in the 📺 shot list).</li>
     <li>Turn tracking on (<kbd>F8</kbd>), select a player (<kbd>Tab</kbd>), click their feet. The video jumps forward by the step (e.g. 5 frames). Repeat.</li>
     <li>Between keyframes positions are <i>interpolated</i> (dashed) only for short gaps – never across occluded / out-of-frame marks.</li>
     <li>Right-click or <kbd>Delete</kbd> removes a keyframe, drag a marker to move it, <kbd>Enter</kbd>/<kbd>Backspace</kbd> step without clicking.</li></ol>
@@ -902,6 +902,13 @@ function renderHelp() {
     <li>In practice: calibrate once every few seconds of a pan – on the Spain v England test, two calibrations 5 s apart gave about 1 m accuracy for the whole stretch, instead of only the moments you calibrated.</li>
     <li>When you calibrate a new moment, the landmarks are <b>placed for you</b> from the camera movement – drag the ones that are off and save.</li>
     <li>The Track tab shows the calibration at the current moment with its estimated error; carrying stops at camera cuts and when the error would exceed 4 m. Switch it off with “calibration follows the camera”.</li></ul>
+    <h3>📺 Broadcast / TV footage (Track tab)</h3>
+    <ol><li><b>📺 Scan camera shots</b> finds every camera cut and sorts the shots: <b>wide</b> and <b>medium</b> (usable for 2D tracking), <b>close-up</b> and <b>other</b> (crowd, bench, graphics). About 1–3 minutes per 10 minutes of video.</li>
+    <li>Mark <b>replays</b> in the shot list (a slow-motion replay from the main camera looks like a normal wide shot, so the app can’t always tell). If a cut was found by mistake, press <b>⤒ join</b>.</li>
+    <li><b>🎯 Calibrate next shot</b> jumps to the next wide shot without a calibration and opens the calibration there. Every shot needs its own calibration – a calibration never continues across a cut, and close-ups, replays and other shots never get one.</li>
+    <li>In 🤖 Auto-detect tick <b>Only wide / medium camera shots</b>: the AI skips everything else.</li>
+    <li>Tracks always end at a cut. A track that starts after a cut is marked <span class="badge cut">after cut</span>; select it to see who it may be from before the cut (by pitch position) and join or name it yourself – nothing is joined automatically across a cut.</li>
+    <li>The 2D view darkens the part of the pitch that is not in the picture. The Positions tab and the PDF report say how much of the pitch was visible and warn when players were at the edge of the picture (team width and length are then probably too small).</li></ol>
     <h3>✏ Correcting AI tracking (Track tab)</h3>
     <ul><li>Nothing the AI found is ever lost: a corrected point keeps the AI position (<b>show AI originals</b>, <b>↺ AI position here</b>, <b>↺ Restore AI track</b>), deleted AI points are kept aside, and <b>📝 Corrections</b> lists every change.</li>
     <li><b>Track timeline</b>: one row per track – green AI, orange unsure AI, blue by hand, magenta = corrected, grey = estimated, empty = missing. Click to select and jump.</li>
@@ -963,7 +970,7 @@ function autosaveNow() {
     const key = projFile ? 'vt_proj_' + projFile : sessionKey;
     if (events.length || Object.keys(match.kickoffs).length || hasTrack || (typeof clips !== 'undefined' && clips.length))
       localStorage.setItem(key, JSON.stringify({ events, nextId, match, video: videoInfo, savedAt: new Date().toISOString(), projectFile: projFile,
-        tracks: hasTrack ? TR.tracks : [], cals: typeof TR !== 'undefined' ? TR.cals : [], trlog: typeof TR !== 'undefined' ? TR.log || [] : [], camera: typeof TR !== 'undefined' ? TR.camera || [] : [], clips: typeof clips !== 'undefined' ? clips : [] }));
+        tracks: hasTrack ? TR.tracks : [], cals: typeof TR !== 'undefined' ? TR.cals : [], trlog: typeof TR !== 'undefined' ? TR.log || [] : [], camera: typeof TR !== 'undefined' ? TR.camera || [] : [], shots: typeof TR !== 'undefined' ? TR.shots || [] : [], cuts: typeof TR !== 'undefined' ? TR.cuts || [] : [], clips: typeof clips !== 'undefined' ? clips : [] }));
     else localStorage.removeItem(key);
   } catch (e) { /* ignore */ }
 }

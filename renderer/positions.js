@@ -111,28 +111,32 @@ function shapeFrame(pts) {
 function sampleTeam(team, step) {
   const span = trackedSpan(); if (!span) return null;
   const mask = makeMask(team), dirs = dirInfo(), norm = normFor(team, dirs), tracks = teamTracks(team);
-  const frames = []; let considered = 0, calibrated = 0, carried = 0, errSum = 0;
+  const frames = []; let considered = 0, calibrated = 0, carried = 0, errSum = 0, viewSum = 0, viewN = 0, skipped = 0;
   for (let t = span[0]; t <= span[1] + 1e-6; t += step) {
     if (!mask(t)) continue;
+    // close-ups, replays and other shots are left out (they show no usable pitch positions)
+    if (!usableAt(t)) { skipped++; continue; }
     considered++;
     const ca = calAt(t);
     if (!ca) { frames.push({ t, pts: [], nocal: true }); continue; }
     calibrated++; if (ca.carried) { carried++; errSum += ca.err; }
-    const pts = [];
+    const vw = viewOf(ca.H, 5); if (vw) { viewSum += vw.frac; viewN++; }
+    const pts = []; let edge = false;
     tracks.forEach(tk => {
       const q = posAt(tk, t); if (!q || q.kind === 'status') return;
       const m = toPitch(t, q.x, q.y); if (!m) return;
       const n = norm(t, m);
+      if (!isEstimate(q) && atPictureEdge(q)) edge = true;
       const est = isEstimate(q), ai = q.src === 'ai' || q.fromAi;
       pts.push({ key: playerKey(tk), tk, x: n[0], y: n[1], w: est ? 0.5 : ai && q.conf != null ? Math.max(0.2, Math.min(1, q.conf * 1.5)) : 1, gk: isKeeper(tk), low: ai && q.conf != null && q.conf < 0.4, interp: est });
     });
-    frames.push({ t, pts });
+    frames.push({ t, pts, edge, view: vw ? vw.frac : null });
   }
-  return { span, frames, considered, calibrated, carried, carriedErr: carried ? errSum / carried : 0, step, dirs };
+  return { span, frames, considered, calibrated, carried, carriedErr: carried ? errSum / carried : 0, step, dirs, viewAvg: viewN ? viewSum / viewN : null, skipped };
 }
 function teamShape(team) {
   const S = sampleTeam(team, POS.step); if (!S) return null;
-  const shapes = S.frames.map(f => f.pts.length ? Object.assign({ t: f.t }, shapeFrame(f.pts)) : null).filter(s => s && s.n);
+  const shapes = S.frames.map(f => f.pts.length ? Object.assign({ t: f.t, edge: f.edge }, shapeFrame(f.pts)) : null).filter(s => s && s.n);
   const avgOf = k => { const v = shapes.map(s => s[k]).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
   const players = new Map();
   S.frames.forEach(f => f.pts.forEach(p => { if (!players.has(p.key)) players.set(p.key, { key: p.key, gk: p.gk, sx: 0, sy: 0, sw: 0, n: 0, low: 0 }); const o = players.get(p.key); o.sx += p.x * p.w; o.sy += p.y * p.w; o.sw += p.w; o.n++; if (p.low) o.low++; }));
@@ -140,7 +144,8 @@ function teamShape(team) {
   const located = S.frames.filter(f => f.pts.length);
   return { S, shapes, avgPos,
     avg: { width: avgOf('width'), length: avgOf('length'), defLine: avgOf('defLine'), area: avgOf('area'), spread: avgOf('spread'), gapDM: avgOf('gapDM'), gapMA: avgOf('gapMA'), n: avgOf('n'), cx: avgOf('cx') },
-    cover: { considered: S.considered, calibrated: S.calibrated, carried: S.carried, carriedErr: S.carriedErr, shapeFrames: shapes.length, avgPlayers: located.length ? located.reduce((a, f) => a + f.pts.length, 0) / located.length : 0,
+    cover: { considered: S.considered, calibrated: S.calibrated, carried: S.carried, carriedErr: S.carriedErr, shapeFrames: shapes.length,
+      viewAvg: S.viewAvg, skipped: S.skipped, edgeShare: shapes.length ? shapes.filter(s => s.edge).length / shapes.length : 0, avgPlayers: located.length ? located.reduce((a, f) => a + f.pts.length, 0) / located.length : 0,
       lowShare: (() => { let n = 0, l = 0; located.forEach(f => f.pts.forEach(p => { n++; if (p.low) l++; })); return n ? l / n : 0; })(),
       interpShare: (() => { let n = 0, l = 0; located.forEach(f => f.pts.forEach(p => { n++; if (p.interp) l++; })); return n ? l / n : 0; })() } };
 }
@@ -195,7 +200,7 @@ function movement(tk, mask) {
 function teamMovement(team) {
   const span = trackedSpan(); if (!span) return [];
   const mask = makeMask(team);
-  let maskTime = 0; for (let t = span[0]; t <= span[1]; t += 0.5) if (mask(t)) maskTime += 0.5;
+  let maskTime = 0; for (let t = span[0]; t <= span[1]; t += 0.5) if (mask(t) && usableAt(t)) maskTime += 0.5;
   const by = new Map();
   teamTracks(team).forEach(tk => {
     const m = movement(tk, mask), k = playerKey(tk);
@@ -313,18 +318,20 @@ function renderPositions() {
   if (shapePct < 0.3) warn.push(`team shape needs 7+ outfield players at once – that was true for only ${pctTxt(shapePct)} of the time`);
   if (c.lowShare > 0.25) warn.push(`${pctTxt(c.lowShare)} of the positions are unsure AI detections`);
   if (POS.when === 'inpos' || POS.when === 'outpos') warn.push('possession is itself an estimate from ball tracking');
+  if (c.viewAvg != null && c.viewAvg < 0.6) warn.push(`the camera showed on average only ${pctTxt(c.viewAvg)} of the pitch – players outside the picture are missing`);
+  if (c.shapeFrames && c.edgeShare > 0.3) warn.push(`in ${pctTxt(c.edgeShare)} of the team-shape moments players were at the edge of the picture, so width and length are probably underestimated`);
   const a = sh.avg;
   const rows = mv.map(o => `<tr><td>${esc(keyLabel(o.key))}${o.gk ? ' <small>(GK)</small>' : ''}</td><td>${f0(o.time)} s <small>(${pctTxt(o.cover)})</small></td><td>${f0(o.dist)}</td><td>${f0(o.perMin)}</td><td>${f1(o.maxV * 3.6)}</td><td>${f0(o.hi)}</td><td>${o.sprints}</td><td>${qualityBadge(o.quality)}</td></tr>`).join('');
   const heatSel = POS.heat;
   const heatSamples = []; sh.S.frames.forEach(f => f.pts.forEach(p => { if (heatSel === 'team' || p.key === heatSel) heatSamples.push(p); }));
   el.innerHTML = controls + `
-    <div class="exportbox ${warn.length ? 'warnbox' : ''}"><b>Data behind these figures</b> · ${fmtTime(span[0])}–${fmtTime(span[1])} · ${f0(c.considered * sh.S.step)} s selected, ${pctTxt(calPct)} calibrated ·
+    <div class="exportbox ${warn.length ? 'warnbox' : ''}"><b>Data behind these figures</b> · ${fmtTime(span[0])}–${fmtTime(span[1])} · ${f0(c.considered * sh.S.step)} s selected${c.skipped ? ` (${f0(c.skipped * sh.S.step)} s of close-ups, replays and other shots left out)` : ''}, ${pctTxt(calPct)} calibrated ·
       ${c.carried ? `(${pctTxt(c.carried / Math.max(1, c.calibrated))} of it by calibrations following the camera, ±${f1(c.carriedErr)} m) ` : ''}·
-      on average ${f1(c.avgPlayers)} ${esc(teamName(team))} players located · ${pctTxt(c.interpShare)} estimated between points · ${pctTxt(c.lowShare)} unsure AI
+      ${c.viewAvg != null ? `on average ${pctTxt(c.viewAvg)} of the pitch in the picture · ` : ''}on average ${f1(c.avgPlayers)} ${esc(teamName(team))} players located · ${pctTxt(c.interpShare)} estimated between points · ${pctTxt(c.lowShare)} unsure AI
       ${warn.length ? `<div class="warn small">⚠ ${warn.join('; ')}.</div>` : ''}<div class="small muted">Video-derived estimates, not GPS. Team shape uses outfield players only.</div></div>
     <h4>Team shape ${c.shapeFrames ? `<small class="muted">(${c.shapeFrames} moments, ${f1(a.n)} outfield players on average)</small>` : ''}</h4>
-    ${c.shapeFrames ? `<table class="sum"><tr><th>Width</th><th>Length</th><th>Defensive line</th><th>Def → mid line</th><th>Mid → att line</th><th>Area (compactness)</th><th>Avg distance to centre</th></tr>
-      <tr><td>${f0(a.width)} m</td><td>${f0(a.length)} m</td><td>${f0(a.defLine)} m from own goal</td><td>${f0(a.gapDM)} m</td><td>${f0(a.gapMA)} m</td><td>${f0(a.area)} m²</td><td>${f1(a.spread)} m</td></tr></table>
+    ${c.shapeFrames ? `<div style="overflow:auto"><table class="sum"><tr><th>Width</th><th>Length</th><th>Defensive line</th><th>Def → mid line</th><th>Mid → att line</th><th>Area (compactness)</th><th>Avg distance to centre</th></tr>
+      <tr><td>${f0(a.width)} m</td><td>${f0(a.length)} m</td><td>${f0(a.defLine)} m from own goal</td><td>${f0(a.gapDM)} m</td><td>${f0(a.gapMA)} m</td><td>${f0(a.area)} m²</td><td>${f1(a.spread)} m</td></tr></table></div>
       ${seriesSVG(sh.shapes, [['width', 'width', '#3ea6ff'], ['length', 'length', '#2ecc71'], ['defLine', 'def. line', '#ffd23b']])}` : '<p class="small muted">Not enough players located at the same time (7+ outfield players needed).</p>'}
     <div class="grid2">
       <div><h4>Average positions</h4>${shapeSVG(sh, team)}<div class="small muted">Shaded: outline of the outfield players. Faded dots: less than 5 s of data; orange ring: many unsure AI points.</div></div>
@@ -375,13 +382,15 @@ function positionalReportHTML() {
     const sh = teamShape(team), mv = teamMovement(team); if (!sh) return;
     const a = sh.avg, c = sh.cover;
     html += `<h3 style="margin:10px 0 4px">${esc(teamName(team))}</h3>
-      <p><small>${f0(c.considered * sh.S.step)} s of tracking, ${pctTxt(c.considered ? c.calibrated / c.considered : 0)} calibrated, ${f1(c.avgPlayers)} players located on average, ${pctTxt(c.lowShare)} unsure AI positions. Video-derived estimates, not GPS.</small></p>
+      <p><small>${f0(c.considered * sh.S.step)} s of tracking, ${pctTxt(c.considered ? c.calibrated / c.considered : 0)} calibrated, ${c.viewAvg != null ? pctTxt(c.viewAvg) + ' of the pitch in the picture on average, ' : ''}${f1(c.avgPlayers)} players located on average, ${pctTxt(c.lowShare)} unsure AI positions. Video-derived estimates, not GPS.</small></p>
+      ${(c.viewAvg != null && c.viewAvg < 0.6) || (c.shapeFrames && c.edgeShare > 0.3) ? `<p><small><b>Limitation:</b> the camera did not show the whole pitch${c.viewAvg != null ? ` (on average ${pctTxt(c.viewAvg)} of it)` : ''}. Players outside the picture are not included${c.shapeFrames ? `; in ${pctTxt(c.edgeShare)} of the team-shape moments players were at the edge of the picture, so width and length are probably underestimated` : ''}.</small></p>` : ''}
       ${c.shapeFrames ? `<table><tr><th>Width</th><th>Length</th><th>Def. line</th><th>Def→mid</th><th>Mid→att</th><th>Area</th></tr><tr><td>${f0(a.width)} m</td><td>${f0(a.length)} m</td><td>${f0(a.defLine)} m</td><td>${f0(a.gapDM)} m</td><td>${f0(a.gapMA)} m</td><td>${f0(a.area)} m²</td></tr></table>` : '<p><small>Team shape: not enough players located at once.</small></p>'}
       <div class="grid" style="margin-top:8px"><div class="card"><h3>Average positions</h3>${shapeSVG(sh, team)}</div>
       <div class="card"><h3>Heat map (team)</h3>${heatSVG(sh.S.frames.flatMap(f => f.pts), teamColor(team))}</div></div>
       ${mv.length ? `<table style="margin-top:8px"><tr><th>Player</th><th>Tracked</th><th>Distance m</th><th>m/min</th><th>Max km/h</th><th>HI m</th><th>Sprints</th><th>Quality</th></tr>
         ${mv.map(o => `<tr><td>${esc(keyLabel(o.key))}</td><td>${f0(o.time)} s</td><td>${f0(o.dist)}</td><td>${f0(o.perMin)}</td><td>${f1(o.maxV * 3.6)}</td><td>${f0(o.hi)}</td><td>${o.sprints}</td><td>${o.quality}</td></tr>`).join('')}</table>` : ''}`;
   });
+  if (TR.shots && TR.shots.length && typeof shotSummary === 'function') { const s = shotSummary(); html += `<p><small><b>Camera:</b> ${pctTxt(s.trackable)} of the video is wide or medium shots (used for positions); ${pctTxt(1 - s.trackable)} is close-ups, replays and other shots, which are left out. ${s.cuts} camera cuts.</small></p>`; }
   const pos = typeof possession === 'function' ? possession() : null;
   if (pos && pos.pctHome != null) html += `<p><b>Possession estimate (ball tracking):</b> ${esc(teamName('Home'))} ${pos.pctHome}% · ${esc(teamName('Away'))} ${pos.pctAway}% <small>(${Math.round(pos.Home + pos.Away)} s with a known owner)</small></p>`;
   Object.assign(POS, keep);

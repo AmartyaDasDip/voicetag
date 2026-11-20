@@ -76,6 +76,8 @@ class Tracker {
     for (const t of this.tracks) { if (t.age > this.maxAge) this.finished.push(t); else keep.push(t); }
     this.tracks = keep;
   }
+  // camera cut: nobody can be followed across it – every live track ends here (and is marked as interrupted)
+  interrupt() { for (const t of this.tracks) { t.cutAfter = true; this.finished.push(t); } this.tracks = []; }
   all() { return this.finished.concat(this.tracks).filter(t => t.hits >= this.minHits); }
 }
 

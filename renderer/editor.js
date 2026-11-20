@@ -49,20 +49,37 @@ function continuations(tk, maxScore = 1.5) {
     if (c === tk || !isPlayerTrack(c)) return;
     const v = visPts(c); if (!v.length) return;
     const s = v[0], gap = s.t - t1;
-    if (gap < -0.3 || gap > 3) return;
+    // across a camera cut the same player can reappear much later – only offered with pitch positions, never auto-joined
+    const acrossCut = typeof cutBetween === 'function' && gap > -0.3 && cutBetween(t1, s.t);
+    if (gap < -0.3 || gap > (acrossCut ? 20 : 3)) return;
     if ((tk.team === 'Home' || tk.team === 'Away') && (c.team === 'Home' || c.team === 'Away') && tk.team !== c.team) return;
     if (tk.playerId && c.playerId && tk.playerId !== c.playerId) return;
     const g = Math.max(0, gap), px = end.p.x + end.vx * g, py = end.p.y + end.vy * g;
     let dist, tol, unit;
     const a = toPitch(t1, px, py), b = toPitch(s.t, s.x, s.y);
-    if (a && b) { dist = Math.hypot(a[0] - b[0], a[1] - b[1]); tol = 2 + 4 * g; unit = 'm'; }
+    if (acrossCut) {
+      const la = toPitch(t1, end.p.x, end.p.y);           // last known pitch position (no extrapolation across a cut)
+      if (!la || !b) return;
+      dist = Math.hypot(la[0] - b[0], la[1] - b[1]); tol = 3 + 6 * Math.min(g, 10); unit = 'm';
+    } else if (a && b) { dist = Math.hypot(a[0] - b[0], a[1] - b[1]); tol = 2 + 4 * g; unit = 'm'; }
     else { dist = Math.hypot(px - s.x, (py - s.y) * 0.56); tol = 0.02 + 0.04 * g; unit = 'img'; }
-    let score = dist / tol;
+    let score = dist / tol + (acrossCut ? 0.5 : 0);
     if (tk.ai && c.ai && tk.ai.colour && c.ai.colour) score += colourGap(tk.ai.colour, c.ai.colour) / 150;
     if (tk.team !== c.team) score += 0.4;
-    if (score <= maxScore) out.push({ tk: c, gap, dist, unit, score });
+    if (score <= maxScore) out.push({ tk: c, gap, dist, unit, score, acrossCut });
   });
   return out.sort((x, y) => x.score - y.score).slice(0, 5);
+}
+// a track that begins just after a camera cut (its identity is uncertain until someone confirms it)
+function afterCutTrack(tk) {
+  if (tk.playerId || !isPlayerTrack(tk)) return false;
+  const v = visPts(tk); if (!v.length) return false;
+  if (tk.ai && tk.ai.afterCut) return true;
+  return typeof cutTimes === 'function' && cutTimes().some(c => v[0].t >= c - 0.05 && v[0].t - c <= 1.5);
+}
+// tracks that ended before a cut and could be this one
+function predecessors(tk) {
+  return TR.tracks.filter(o => o !== tk && isPlayerTrack(o)).map(o => ({ o, c: continuations(o, 2).find(c => c.tk === tk && c.acrossCut) })).filter(x => x.c).sort((a, b) => a.c.score - b.c.score).slice(0, 4);
 }
 function colourGap(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]); }
 // join every broken track whose best continuation is clear and mutual
@@ -70,10 +87,10 @@ function autoLinkPlan(maxScore = 0.7) {
   const plan = [], used = new Set();
   TR.tracks.filter(isPlayerTrack).map(tk => ({ tk, e: endInfo(tk) })).filter(x => x.e).sort((a, b) => a.e.p.t - b.e.p.t).forEach(({ tk }) => {
     if (used.has(tk.id)) return;
-    const c = continuations(tk, maxScore)[0];
+    const c = continuations(tk, maxScore).filter(x => !x.acrossCut)[0];      // never across a camera cut
     if (!c || used.has(c.tk.id)) return;
     // mutual check: no other ending track fits this start clearly better
-    const rivals = TR.tracks.filter(o => o !== tk && o !== c.tk && isPlayerTrack(o) && !used.has(o.id)).map(o => continuations(o, maxScore).find(q => q.tk === c.tk)).filter(Boolean);
+    const rivals = TR.tracks.filter(o => o !== tk && o !== c.tk && isPlayerTrack(o) && !used.has(o.id)).map(o => continuations(o, maxScore).find(q => q.tk === c.tk && !q.acrossCut)).filter(Boolean);
     if (rivals.some(r => r.score < c.score)) return;
     plan.push([tk, c.tk, c]); used.add(c.tk.id);
   });
@@ -224,10 +241,12 @@ function renderEditorBox() {
     const here = tk.points.find(q => Math.abs(q.t - t) < frameDur() * 0.51);
     const cont = continuations(tk);
     const corr = tk.points.filter(p => p.orig).length + (tk.removed || []).length;
+    const pred = afterCutTrack(tk) ? predecessors(tk) : [];
     html += `<div class="edbox">
       <div class="toolbar"><b>Who is ${esc(trackLabel(tk))}?</b><input id="edWho" placeholder="number or name, e.g. 9" style="width:150px"><button class="small primary" id="edWhoGo">Assign</button>
         <span class="small muted">or say / type “this is nine”</span></div>
-      ${cont.length ? `<div class="small">Continues as: ${cont.map(c => `<button class="small chip" data-cont="${c.tk.id}" title="score ${c.score.toFixed(2)} – lower is better">${esc(trackLabel(c.tk))} · ${c.gap <= 0 ? 'overlaps' : '+' + c.gap.toFixed(1) + ' s'} · ${c.unit === 'm' ? c.dist.toFixed(1) + ' m' : Math.round(c.dist * 100) + '% wide'}</button>`).join(' ')}</div>` : ''}
+      ${cont.length ? `<div class="small">Continues as: ${cont.map(c => `<button class="small chip ${c.acrossCut ? 'cutchip' : ''}" data-cont="${c.tk.id}" title="score ${c.score.toFixed(2)} – lower is better${c.acrossCut ? ' – after a camera cut: check before joining' : ''}">${c.acrossCut ? '⚠ after cut · ' : ''}${esc(trackLabel(c.tk))} · ${c.gap <= 0 ? 'overlaps' : '+' + c.gap.toFixed(1) + ' s'} · ${c.unit === 'm' ? c.dist.toFixed(1) + ' m' : Math.round(c.dist * 100) + '% wide'}</button>`).join(' ')}</div>` : ''}
+      ${pred.length ? `<div class="small"><span class="badge cut">after a camera cut</span> identity uncertain – before the cut this may be: ${pred.map(x => `<button class="small chip cutchip" data-pred="${x.o.id}" title="${x.c.dist.toFixed(1)} m from where that player was last seen">${esc(trackLabel(x.o))} · ${x.c.dist.toFixed(1)} m · ${x.c.gap.toFixed(1)} s</button>`).join(' ')}</div>` : ''}
       <div class="toolbar">
         <button class="small" id="tkJoin" title="Two tracks are the same person: join them">⇄ Join with…</button>
         <button class="small" id="tkSplit" title="The track jumps to another person from here: cut it into a new track">✂ Split here</button>
@@ -250,6 +269,7 @@ function renderEditorBox() {
   const who = () => { const p = playerFromText(box.querySelector('#edWho').value, tk.team === 'Neutral' ? '' : tk.team); if (!p) { toast('No squad player matches that', 'bad'); return; } assignIdentity(tk, p); };
   b('#edWhoGo', who);
   const wi = box.querySelector('#edWho'); if (wi) wi.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') who(); };
+  box.querySelectorAll('[data-pred]').forEach(x => x.onclick = () => { const o = TR.tracks.find(q => q.id === x.dataset.pred); if (!o) return; checkpoint(); mergeTracks(o, tk); TR.sel = o.id; autosave(); renderTrackTab(); paintTracking(true); toast('Joined across the cut: ' + trackLabel(o), 'ok'); });
   box.querySelectorAll('[data-cont]').forEach(x => x.onclick = () => { const o = TR.tracks.find(q => q.id === x.dataset.cont); if (!o) return; checkpoint(); mergeTracks(tk, o); autosave(); renderTrackTab(); paintTracking(true); toast('Joined', 'ok'); });
   b('#tkJoin', () => joinTracksDialog()); b('#tkSplit', () => splitTrackHere());
   b('#edSwap', () => swapDialog(tk)); b('#edGap', () => nextGapOf(tk));
