@@ -249,7 +249,7 @@ svg.series { width: 100%; max-height: 130px; display: block; margin: 4px 0 8px; 
 button.chip.cutchip { border-color: #8e44ad; }
 /* 3D view (2.6) */
 #p3d{position:absolute;left:10px;top:10px;z-index:7;background:rgba(14,18,23,.96);border:1px solid var(--line);border-radius:8px;padding:6px;width:640px;max-height:calc(100% - 20px);display:flex;flex-direction:column}
-#p3d.s{width:430px}#p3d.l{width:940px;max-width:calc(100% - 20px)}
+#p3d.s{width:430px}#p3d.l{width:940px}#p3d{max-width:calc(100% - 20px)}
 #p3d.full{left:0;top:0;right:0;bottom:0;width:auto;max-height:none;border-radius:0}
 #p3d .p2head{display:flex;align-items:center;gap:6px;margin-bottom:4px}
 #p3d .p3opts{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:4px}
@@ -261,3 +261,4 @@ button.chip.cutchip { border-color: #8e44ad; }
 #p3hud{pointer-events:none}
 #p3msg,#p3export{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;background:rgba(10,14,20,.82);color:#ffd36b;padding:20px;text-align:center}
 #p3replay{display:flex;align-items:center;gap:6px;margin-top:4px}#p3rSlider{flex:1}
+#updBar{position:fixed;left:50%;transform:translateX(-50%);bottom:12px;z-index:60;background:#163222;border:1px solid #2ecc71;border-radius:8px;padding:7px 10px;display:flex;gap:8px;align-items:center;box-shadow:0 4px 18px rgba(0,0,0,.5)}

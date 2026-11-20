@@ -171,6 +171,12 @@ $('#btnXlsx').onclick = async () => {
 };
 
 /* ---------------------------------------------------------------- PROJECTS */
+// project file text; the (big) tracking data is put in from the per-track cache instead of being converted again
+function projectText(proj) {
+  if (!proj.tracking || typeof TR === 'undefined' || proj.tracking.tracks !== TR.tracks) return JSON.stringify(proj);
+  const txt = JSON.stringify(Object.assign({}, proj, { tracking: Object.assign({}, proj.tracking, { tracks: '__TQ_TRACKS__', camera: '__TQ_CAMERA__' }) }));
+  return txt.replace('"__TQ_TRACKS__"', () => TrackJson.all()).replace('"__TQ_CAMERA__"', () => CamJson.get());
+}
 function projectObject() {
   return { app: 'VoiceTag', product: 'TACTIQ ANALYST', version: 4, appVersion: APP_VERSION, savedAt: new Date().toISOString(),
     project: { info: typeof project !== 'undefined' ? project.info : {} },
@@ -197,6 +203,12 @@ async function openProjectData(p, path, askConfig = true) {
   const evs = normaliseEvents(p.events);
   const m = Object.assign(EMPTY_MATCH(), p.match || {});
   autosaveNow();
+  // until the caller has set the project, automatic copies would go to the wrong place
+  window.__loadingProject = true;
+  try { return await openProjectDataInner(p, path, evs, m); } finally { setTimeout(() => { window.__loadingProject = false; }, 0); }
+}
+async function openProjectDataInner(p, path, evs, m) {
+  window.__loadingProject = true;
   events = evs; nextId = p.nextId || (Math.max(0, ...evs.map(x => x.id)) + 1); undoStack = []; open = {}; match = m; locAsk = null;
   target = { kind: null, id: null, seq: 0 };
   live.on = false; live.running = false;

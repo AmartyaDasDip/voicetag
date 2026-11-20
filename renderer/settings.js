@@ -153,6 +153,8 @@ function renderSettings() {
       <label>Beep when a tag is recorded</label><input type="checkbox" data-g="beep" ${g.beep ? 'checked' : ''} style="justify-self:start">
       <label>Ask for the location after each tag</label><input type="checkbox" data-g="askLocation" ${g.askLocation ? 'checked' : ''} style="justify-self:start">
       <label>Auto-fill Zone / Side from location</label><input type="checkbox" data-g="autoZone" ${g.autoZone ? 'checked' : ''} style="justify-self:start">
+      <label>Check for a new version once a day</label><input type="checkbox" data-g="updateCheck" ${g.updateCheck !== false ? 'checked' : ''} style="justify-self:start">
+      <span class="hint">Asks GitHub (where the installer is published) if there is a newer version – nothing else is sent. Needs internet.</span>
       <label>Drawing freeze time (seconds)</label><input type="number" step="0.5" min="0.5" max="20" data-g="freezeDur" value="${esc(g.freezeDur)}">
       <label>Title card length (seconds)</label><input type="number" step="0.5" min="0.5" max="10" data-g="titleDur" value="${esc(g.titleDur)}">
       <label>XML timeline rows</label><select data-g="xmlCode"><option value="code" ${g.xmlCode === 'code' ? 'selected' : ''}>One row per code</option><option value="player" ${g.xmlCode === 'player' ? 'selected' : ''}>One row per player</option><option value="both" ${g.xmlCode === 'both' ? 'selected' : ''}>Player + code</option></select>

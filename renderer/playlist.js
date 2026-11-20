@@ -29,7 +29,7 @@ function renderPlaylist() {
   const sel = items.filter(e => !PL.excluded.has(e.id));
   $('#plInfo').textContent = sel.length + ' clip(s), ' + fmtTime(sel.reduce((s, e) => s + e.end - e.start, 0)) + ' total';
 }
-HOOKS.render.push(tab => { if (!tab || tab === 'playlist') renderPlaylist(); });
+HOOKS.render.push(tab => { if (tab === 'playlist' || (!tab && !$('#tab-playlist').classList.contains('hidden'))) renderPlaylist(); });
 $('#plCodes').addEventListener('click', e => {
   const c = e.target.closest('[data-plc]'); if (!c) return;
   const id = c.dataset.plc; PL.codes.has(id) ? PL.codes.delete(id) : PL.codes.add(id);

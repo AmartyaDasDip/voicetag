@@ -63,7 +63,7 @@ function durationRows(list = events) {
   });
   return [...map.values()];
 }
-HOOKS.render.push(tab => { if (!tab || tab === 'summary') renderSummary(); });
+HOOKS.render.push(tab => { if (tab === 'summary' || (!tab && !$('#tab-summary').classList.contains('hidden'))) renderSummary(); });
 $('#sumTeam').onchange = renderSummary;
 $('#sumPer90').onchange = renderSummary;
 

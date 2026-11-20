@@ -18,7 +18,8 @@ function ballAt(t, tk) {
 // Ball owner = the team of the nearest tracked player when that player is close enough (2 m on a calibrated
 // pitch, otherwise ~3% of the picture width). Possession only changes after the other team has been in
 // control for 0.4 s; while the ball travels between players it stays with the team that last had it.
-function possession(t0, t1, step = 0.2) {
+function possession(t0, t1, step = 0.2) { return Memo.get('poss|' + t0 + '|' + t1 + '|' + step, () => possessionCalc(t0, t1, step)); }
+function possessionCalc(t0, t1, step) {
   const btk = ballTrack(); if (!btk) return null;
   const span = ballSpan(btk);
   t0 = Math.max(t0 != null ? t0 : span[0], span[0]); t1 = Math.min(t1 != null ? t1 : span[1], span[1]);
@@ -64,9 +65,7 @@ function renderBallPanel() {
   const tk = ballTrack();
   if (!tk) { box.innerHTML = ''; return; }
   const [a, b] = ballSpan(tk);
-  let det = 0, man = 0, est = 0, miss = 0;
-  const fd = Math.max(frameDur(), 0.04);
-  for (let t = a; t <= b; t += 0.2) { const q = ballAt(t, tk); if (!q) miss++; else if (isEstimate(q)) est++; else if (q.src === 'manual') man++; else det++; }
+  const { det, man, est, miss } = Memo.get('ballcount|' + tk.id, () => { let det = 0, man = 0, est = 0, miss = 0; for (let t = a; t <= b; t += 0.2) { const q = ballAt(t, tk); if (!q) miss++; else if (isEstimate(q)) est++; else if (q.src === 'manual') man++; else det++; } return { det, man, est, miss }; });
   const n = det + man + est + miss || 1, pc = v => Math.round(v / n * 100);
   const pos = possession(a, b);
   box.innerHTML = `<div class="ballpanel">
@@ -134,7 +133,7 @@ HOOKS.afterTag.push(ev => {
 
 /* ---------------------------------------------------------------- stats tab: possession */
 HOOKS.render.push(tab => {
-  if (tab && tab !== 'summary') return;
+  if (tab ? tab !== 'summary' : $('#tab-summary').classList.contains('hidden')) return;
   const host = document.querySelector('#possBox'); if (!host) return;
   const pos = ballTrack() ? possession() : null;
   if (!pos || pos.pctHome == null) { host.innerHTML = '<p class="small muted">Track the ball (Track tab → 🤖 Auto-detect with the ball, or click it by hand) together with the players to get a possession estimate.</p>'; return; }

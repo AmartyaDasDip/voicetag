@@ -1,5 +1,58 @@
 # TACTIQ ANALYST – changelog
 
+## 3.0.0 – roadmap phase 1.0: production release
+
+The last phase of the blueprint: stable for full matches, safe against crashes, tested on Windows in every build,
+with a user guide and tutorial videos.
+
+### Full 90-minute matches stay fast
+Measured with a full match (90 min video, 2 060 tags, every player and the ball tracked by AI: 1.6 million positions,
+calibrations every 30 s, 270 camera shots) on a slow 2-core PC:
+
+| | 2.6 | 3.0 |
+|---|---|---|
+| Open the project | 25 s | 2.2 s |
+| Make a tag | 8.5 s | 0.09 s |
+| Undo | 10 s | 0.1 s |
+| Memory per undo step | +80 MB | ~0 |
+| Track tab / Stats / Positions tab | 7.8 / 3.1 / 19.9 s | 0.9 / 0.35 / 0.9 s |
+| PDF report with positional pages | 18.7 s | 0.5 s |
+| Memory after opening | 2.1 GB | 1.3–1.5 GB |
+
+How: unchanged tracks are shared between undo steps, crash copies and saves instead of being copied again; heavy
+results (possession, team shape, distances, timelines) are kept until the data changes; calibration look-ups are
+cached; the tag list only builds the rows in view; hidden tabs are not redrawn; the track timeline is drawn once per
+change; long matches are sampled more coarsely in the Positions tab (same averages).
+
+### Crash recovery and error log
+- Every change is copied to a safe place within a second (tracking data at least every 8 s). After a crash, a power
+  cut or "End task", the next start says *TACTIQ ANALYST did not close properly* and offers **↻ Restore my work**.
+  If the window itself crashes it reloads and offers the same. Opening a project whose automatic copy is newer than
+  the file asks whether to use it.
+- Big tracking data is no longer kept in the browser storage (it did not fit there) but in a file.
+- A log file (14 days) records start, errors in the window, AI, video conversion and export problems, crashes.
+  **Help → 🛠 Troubleshooting**: open the log folder, copy a diagnostic report (version, Windows, memory, graphics,
+  last log lines), check for a new version.
+
+### Update check
+- Once a day the app asks GitHub for the latest release and shows a bar with **Download** when there is a newer one
+  (Settings → General to turn it off).
+
+### Tested on Windows in every build
+- The Windows build now installs the new version silently and runs an end-to-end smoke test on the *installed* app
+  before publishing it: start, new project, playing video, tagging by key / typing / phase, **voice tagging with the
+  offline model** (spoken commands fed in as a microphone), saving, screenshot, highlight video, PDF report, AI
+  engine, camera-shot scan, 3D view and 3D MP4, memory, update check, clean close, reopening, crash recovery, and
+  opening MTS / AVI / WEBM. The installer is only published when every check passes.
+
+### User guide and tutorials
+- A 21-page step-by-step user guide (PDF) and two short tutorial videos (tagging a match; from AI tracking to a 3D
+  replay).
+
+### Fixes
+- The 3D window no longer sticks out of a small video area.
+- Opening a project no longer leaves a stray copy of it as a "quick session".
+
 ## 2.6.0 – roadmap phase 0.9: 3D tactical view
 
 A 3D pitch with the tracked players and the ball, built from the 2D tracking data. Tested in the real desktop app:

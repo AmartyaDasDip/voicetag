@@ -47,7 +47,8 @@ function makeMask(team) {
 }
 // attacking direction: the team whose players are on average nearer a goal defends that goal (works for
 // low blocks too: the defending block sits between the attackers and its own goal). Can be overridden.
-function dirInfo() {
+function dirInfo() { return Memo.get('dir|' + POS.dir + '|' + pitchDims().L, dirInfoCalc); }
+function dirInfoCalc() {
   const { L } = pitchDims(), span = trackedSpan(), out = {};
   ['1', '2', '3', '4', '5'].forEach(per => {
     if (POS.dir !== 'auto') { const r = POS.dir === 'right'; out[per] = { Home: (per === '2' || per === '4') ? !r : r }; return; }
@@ -108,7 +109,11 @@ function shapeFrame(pts) {
     gapDM: lines ? lines[1] - lines[0] : null, gapMA: lines ? lines[2] - lines[1] : null };
 }
 // sample the chosen team every `step` seconds inside the mask
-function sampleTeam(team, step) {
+// long matches are sampled more coarsely (at most ~3000 moments): averages stay the same, the tab stays quick
+function posStep() { const sp = trackedSpan(); return sp ? Math.max(POS.step, Math.round((sp[1] - sp[0]) / 3000 * 10) / 10) : POS.step; }
+const posKey = team => [team, POS.when, POS.code, POS.range, POS.dir, POS.team].join('|');
+function sampleTeam(team, step) { return Memo.get('st|' + posKey(team) + '|' + step, () => sampleTeamCalc(team, step)); }
+function sampleTeamCalc(team, step) {
   const span = trackedSpan(); if (!span) return null;
   const mask = makeMask(team), dirs = dirInfo(), norm = normFor(team, dirs), tracks = teamTracks(team);
   const frames = []; let considered = 0, calibrated = 0, carried = 0, errSum = 0, viewSum = 0, viewN = 0, skipped = 0;
@@ -134,8 +139,9 @@ function sampleTeam(team, step) {
   }
   return { span, frames, considered, calibrated, carried, carriedErr: carried ? errSum / carried : 0, step, dirs, viewAvg: viewN ? viewSum / viewN : null, skipped };
 }
-function teamShape(team) {
-  const S = sampleTeam(team, POS.step); if (!S) return null;
+function teamShape(team) { return Memo.get('shape|' + posKey(team), () => teamShapeCalc(team)); }
+function teamShapeCalc(team) {
+  const S = sampleTeam(team, posStep()); if (!S) return null;
   const shapes = S.frames.map(f => f.pts.length ? Object.assign({ t: f.t, edge: f.edge }, shapeFrame(f.pts)) : null).filter(s => s && s.n);
   const avgOf = k => { const v = shapes.map(s => s[k]).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
   const players = new Map();
@@ -197,7 +203,8 @@ function movement(tk, mask) {
   const cal = (() => { const ids = new Set(pts.filter(Boolean).map(p => p.seg)); const q = [...ids].map(id => TR.cals.find(c => c.id === id)).filter(Boolean).map(c => calQuality(c).rmse).filter(x => x != null); return q.length ? Math.max(...q) : null; })();
   return { dist, time, hi, glitches, maxV, sprints, sprintTime, lowShare: nPts ? lowN / nPts : 0, calErr: cal };
 }
-function teamMovement(team) {
+function teamMovement(team) { return Memo.get('move|' + posKey(team), () => teamMovementCalc(team)); }
+function teamMovementCalc(team) {
   const span = trackedSpan(); if (!span) return [];
   const mask = makeMask(team);
   let maskTime = 0; for (let t = span[0]; t <= span[1]; t += 0.5) if (mask(t) && usableAt(t)) maskTime += 0.5;
@@ -264,7 +271,8 @@ function seriesSVG(shapes, keys) {
   s += keys.map(([, name, col], i) => `<text x="${34 + i * 80}" y="9" font-size="8.5" fill="${col}">■ ${name} (m)</text>`).join('');
   return s + '</svg>';
 }
-function ballInfo(team) {
+function ballInfo(team) { return Memo.get('ball|' + posKey(team), () => ballInfoCalc(team)); }
+function ballInfoCalc(team) {
   const btk = typeof ballTrack === 'function' ? ballTrack() : null, span = trackedSpan();
   if (!btk || !span) return null;
   const mask = makeMask(team), norm = normFor(team, dirInfo());

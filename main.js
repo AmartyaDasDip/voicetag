@@ -18,6 +18,29 @@ const RENDERER_DIR = path.join(__dirname, 'renderer');
 // keep settings, tags and season data from the VoiceTag versions
 app.setName('TACTIQ ANALYST');
 app.setPath('userData', path.join(app.getPath('appData'), 'VoiceTag'));
+if (process.env.TACTIQ_USERDATA) app.setPath('userData', process.env.TACTIQ_USERDATA);   // tests run with their own settings folder
+
+/* ------------------------------------------------------------------ LOG FILE
+   Errors and important events go to <settings folder>/logs/tactiq-YYYY-MM-DD.log (kept 14 days, at most 10 MB a day).
+   Help → Troubleshooting opens the folder or copies a diagnostic report. */
+const logDir = () => path.join(app.getPath('userData'), 'logs');
+let logFile = null;
+function logLine(level, src, msg) {
+  try {
+    const day = new Date().toISOString().slice(0, 10);
+    if (!logFile || !logFile.includes(day)) {
+      fs.mkdirSync(logDir(), { recursive: true }); logFile = path.join(logDir(), 'tactiq-' + day + '.log');
+      fs.readdirSync(logDir()).filter(f => /^tactiq-.*\.log$/.test(f)).sort().slice(0, -14).forEach(f => { try { fs.rmSync(path.join(logDir(), f)); } catch (e) { /* in use */ } });
+    }
+    try { if (fs.statSync(logFile).size > 10 * 1048576) return; } catch (e) { /* new file */ }
+    fs.appendFileSync(logFile, new Date().toISOString() + ' ' + String(level).toUpperCase().padEnd(5) + ' [' + src + '] ' + String(msg).replace(/\r?\n/g, ' ⏎ ').slice(0, 4000) + '\n');
+  } catch (e) { /* logging must never break the app */ }
+}
+function readLogTail(n) {
+  try { const files = fs.readdirSync(logDir()).filter(f => /^tactiq-.*\.log$/.test(f)).sort(); let lines = []; for (let i = files.length - 1; i >= 0 && lines.length < n; i--) lines = fs.readFileSync(path.join(logDir(), files[i]), 'utf8').split('\n').filter(Boolean).concat(lines); return lines.slice(-n); } catch (e) { return []; }
+}
+process.on('uncaughtException', err => logLine('error', 'main', 'uncaught: ' + (err && err.stack || err)));
+process.on('unhandledRejection', err => logLine('error', 'main', 'unhandled promise: ' + (err && err.stack || err)));
 // In the installed app the model sits in resources/model, during development in ./model
 function modelFile() {
   const candidates = [
@@ -110,7 +133,17 @@ function createWindow() {
     try { win.webContents.send('app-closing'); } catch (err) { /* ignore */ }
   });
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+  // the window's process crashed: log it and reload – the app then offers the automatically saved work
+  win.webContents.on('render-process-gone', (e, d) => {
+    logLine('error', 'main', 'window process gone: ' + d.reason + ' (exit code ' + d.exitCode + ')');
+    if (d.reason === 'clean-exit') return;
+    startState.rendererCrashes++;
+    if (startState.rendererCrashes <= 3) setTimeout(() => { try { win.webContents.reload(); } catch (err) { logLine('error', 'main', 'reload failed: ' + err.message); } }, 600);
+  });
+  win.on('unresponsive', () => logLine('warn', 'main', 'window not responding'));
+  win.on('responsive', () => logLine('info', 'main', 'window responding again'));
 }
+app.on('child-process-gone', (e, d) => { if (d.reason !== 'clean-exit') logLine('warn', 'main', `${d.type} process gone: ${d.reason} (exit code ${d.exitCode})${d.name ? ' ' + d.name : ''}`); });
 
 function buildMenu() {
   const template = [
@@ -124,7 +157,19 @@ function buildMenu() {
 // open .tactiq project files from Explorer (double-click), one window only
 const fileArg = argv => (argv || []).find(x => /\.tactiq$/i.test(x));
 let pendingFile = fileArg(process.argv);
-if (!app.requestSingleInstanceLock()) app.quit();
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) app.quit();
+// "running" marker: if it is still there at the next start, the app did not close properly (crash, power cut, killed)
+const lockFile = () => path.join(app.getPath('userData'), 'running.lock');
+const startState = { crashed: false, previous: null, rendererCrashes: 0 };
+if (primaryInstance) {
+  try { if (fs.existsSync(lockFile())) { startState.crashed = true; try { startState.previous = JSON.parse(fs.readFileSync(lockFile(), 'utf8')); } catch (e) { /* unreadable */ } } } catch (e) { /* ignore */ }
+  try { fs.mkdirSync(app.getPath('userData'), { recursive: true }); fs.writeFileSync(lockFile(), JSON.stringify({ pid: process.pid, started: new Date().toISOString(), version: app.getVersion() })); } catch (e) { /* ignore */ }
+  const os = require('os');
+  logLine('info', 'main', `start ${app.getName()} ${app.getVersion()} · Electron ${process.versions.electron} · ${process.platform} ${os.release()} ${process.arch} · ${Math.round(os.totalmem() / 1073741824 * 10) / 10} GB RAM · ${os.cpus().length} threads ${(os.cpus()[0] || {}).model || ''}`);
+  if (startState.crashed) logLine('warn', 'main', 'the previous session did not close properly' + (startState.previous ? ' (started ' + startState.previous.started + ', version ' + startState.previous.version + ')' : ''));
+  app.on('will-quit', () => { logLine('info', 'main', 'closed normally'); try { fs.rmSync(lockFile(), { force: true }); } catch (e) { /* ignore */ } });
+}
 app.on('second-instance', (e, argv) => {
   if (win) { if (win.isMinimized()) win.restore(); win.focus(); const f = fileArg(argv); if (f) win.webContents.send('open-file', f); }
 });
@@ -135,6 +180,7 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionCheckHandler((wc, permission) => permission === 'media' || permission === 'clipboard-sanitized-write');
   buildMenu();
   createWindow();
+  try { const g = app.getGPUFeatureStatus(); logLine('info', 'main', 'graphics: webgl ' + g.webgl + ', video decode ' + g.video_decode + ', 2d canvas ' + g['2d_canvas']); } catch (e) { /* ignore */ }
 });
 app.on('window-all-closed', () => app.quit());
 
@@ -194,10 +240,12 @@ ipcMain.handle('export-pdf', async (e, { html, defaultName }) => {
     fs.promises.unlink(tmp).catch(() => {});
   }
 });
-ipcMain.handle('open-text-file', async (e, { filters }) => {
+ipcMain.handle('open-text-file', async (e, { filters, skipText }) => {
   const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters });
   if (r.canceled || !r.filePaths[0]) return null;
-  return { path: r.filePaths[0], text: await fs.promises.readFile(r.filePaths[0], 'utf8') };
+  const f = r.filePaths[0];
+  if (typeof skipText === 'string' && new RegExp(skipText, 'i').test(f)) return { path: f, text: null };   // a big project is read once, later
+  return { path: f, text: await fs.promises.readFile(f, 'utf8') };
 });
 ipcMain.handle('model-info', async () => ({ available: !!modelFile(), url: 'app://voicetag/model/model.tar.gz' }));
 ipcMain.handle('ffmpeg-info', async () => ({ available: !!ffmpegPath() }));
@@ -227,6 +275,7 @@ ipcMain.handle('export-clips', async (e, opts) => {
     });
     return { ok: true, path: out };
   } catch (err) {
+    if (!(currentExport && currentExport.cancelled)) logLine('error', 'export', 'video export failed: ' + (err.message || err));
     return { ok: false, error: currentExport && currentExport.cancelled ? 'Export cancelled' : String(err.message || err) };
   } finally { currentExport = null; }
 });
@@ -259,6 +308,7 @@ ipcMain.handle('convert-video', async (e, p) => {
     allowedMedia.add(path.resolve(out));
     return { ok: true, path: out, remuxed: r.remuxed };
   } catch (err) {
+    if (!(currentConvert && currentConvert.cancelled)) logLine('error', 'convert', path.basename(p) + ': ' + (err.message || err));
     return { ok: false, error: currentConvert && currentConvert.cancelled ? 'cancelled' : String(err.message || err) };
   } finally { currentConvert = null; }
 });
@@ -299,7 +349,80 @@ ipcMain.handle('v3d-end', async (e, { cancel } = {}) => {
   const code = await j.done;
   if (code === 0 && fs.existsSync(j.part)) { fs.renameSync(j.part, j.out); allowedMedia.add(path.resolve(j.out)); return { ok: true, file: j.out }; }
   try { fs.rmSync(j.part, { force: true }); } catch (err) { /* ignore */ }
-  return { ok: false, error: (j.err || 'ffmpeg exit code ' + code).split('\n').filter(Boolean).slice(-3).join(' | ') };
+  const msg = (j.err || 'ffmpeg exit code ' + code).split('\n').filter(Boolean).slice(-3).join(' | ');
+  logLine('error', '3d', 'video failed: ' + msg);
+  return { ok: false, error: msg };
+});
+
+/* ------------------------------------------------------------------ LOG, DIAGNOSTICS, CRASH RECOVERY */
+ipcMain.on('log', (e, o) => { if (o && o.msg) logLine(o.level === 'error' ? 'error' : o.level === 'warn' ? 'warn' : 'info', 'window', o.msg); });
+ipcMain.handle('startup-info', async () => ({ crashed: startState.crashed, previous: startState.previous, rendererCrashes: startState.rendererCrashes, logDir: logDir(), userData: app.getPath('userData') }));
+ipcMain.handle('crash-handled', async () => { startState.crashed = false; startState.rendererCrashes = 0; return true; });
+ipcMain.handle('open-log-folder', async () => { fs.mkdirSync(logDir(), { recursive: true }); return shell.openPath(logDir()); });
+ipcMain.handle('diagnostics', async () => {
+  const os = require('os'); let gpu = {}, gpuInfo = null;
+  try { gpu = app.getGPUFeatureStatus(); } catch (e) { /* ignore */ }
+  try { const g = await app.getGPUInfo('basic'); gpuInfo = (g.gpuDevice || []).map(d => `${d.vendorString || d.vendorId} ${d.deviceString || d.deviceId}${d.active ? ' (active)' : ''}`).join('; '); } catch (e) { /* ignore */ }
+  const mem = app.getAppMetrics().reduce((a, m) => a + m.memory.workingSetSize, 0) / 1024;
+  return [
+    `TACTIQ ANALYST ${app.getVersion()} (Electron ${process.versions.electron}, Chrome ${process.versions.chrome}, Node ${process.versions.node})`,
+    `Windows/OS: ${process.platform} ${os.release()} ${process.arch} · ${Math.round(os.totalmem() / 1073741824 * 10) / 10} GB RAM (${Math.round(os.freemem() / 1073741824 * 10) / 10} GB free) · ${os.cpus().length} threads · ${(os.cpus()[0] || {}).model || ''}`,
+    `Graphics: ${gpuInfo || 'unknown'} · WebGL ${gpu.webgl} · video decode ${gpu.video_decode}`,
+    `App memory now: ${Math.round(mem)} MB · ffmpeg ${ffmpegPath() ? 'OK' : 'MISSING'} · voice model ${modelFile() ? 'OK' : 'MISSING'} · AI models ${aiModelPath('yolo11n.onnx') ? 'fast OK' : 'fast MISSING'}, ${aiModelPath('yolo11s.onnx') ? 'accurate OK' : 'accurate MISSING'}`,
+    `Settings folder: ${app.getPath('userData')}`,
+    `Previous session closed properly: ${startState.crashed ? 'NO' : 'yes'}`,
+    '', '--- last log lines ---', ...readLogTail(80)
+  ].join('\n');
+});
+// automatic crash copies of the work: <settings folder>/recovery/<key>.light.json (+ .tracks.json for tracking data)
+const recDir = () => path.join(app.getPath('userData'), 'recovery');
+const recBase = key => path.join(recDir(), require('crypto').createHash('sha1').update(String(key)).digest('hex').slice(0, 20));
+const recQueue = new Map();
+function recWriteFile(file, text) { const tmp = file + '.tmp'; fs.writeFileSync(tmp, text); fs.renameSync(tmp, file); }
+ipcMain.handle('recovery-write', async (e, { key, light, tracks }) => {
+  const prev = recQueue.get(key) || Promise.resolve();
+  const job = prev.then(async () => {
+    fs.mkdirSync(recDir(), { recursive: true }); const b = recBase(key);
+    if (tracks != null) { await fs.promises.writeFile(b + '.tracks.json.tmp', tracks); await fs.promises.rename(b + '.tracks.json.tmp', b + '.tracks.json'); }
+    if (light != null) { await fs.promises.writeFile(b + '.light.json.tmp', light); await fs.promises.rename(b + '.light.json.tmp', b + '.light.json'); }
+  }).catch(err => logLine('error', 'main', 'crash copy not written: ' + err.message));
+  recQueue.set(key, job); await job; if (recQueue.get(key) === job) recQueue.delete(key);
+  return true;
+});
+ipcMain.on('recovery-write-sync', (e, { key, light, tracks }) => {
+  try { fs.mkdirSync(recDir(), { recursive: true }); const b = recBase(key); if (tracks != null) recWriteFile(b + '.tracks.json', tracks); if (light != null) recWriteFile(b + '.light.json', light); }
+  catch (err) { logLine('error', 'main', 'crash copy not written: ' + err.message); }
+  e.returnValue = true;
+});
+ipcMain.handle('recovery-read', async (e, key) => {
+  const b = recBase(key), rd = f => fs.promises.readFile(f, 'utf8').catch(() => null);
+  const [light, tracks] = await Promise.all([rd(b + '.light.json'), rd(b + '.tracks.json')]);
+  return light ? { light, tracks } : null;
+});
+ipcMain.handle('recovery-clear', async (e, key) => { const b = recBase(key); [b + '.light.json', b + '.tracks.json'].forEach(f => { try { fs.rmSync(f, { force: true }); } catch (err) { /* ignore */ } }); return true; });
+ipcMain.handle('recovery-list', async () => {
+  let files = []; try { files = fs.readdirSync(recDir()).filter(f => f.endsWith('.light.json')); } catch (e) { return []; }
+  return files.map(f => {
+    try { const o = JSON.parse(fs.readFileSync(path.join(recDir(), f), 'utf8')); return { key: o.key, savedAt: o.savedAt, projectFile: o.projectFile || null, projectName: o.projectName || '', events: (o.events || []).length, video: o.video && o.video.name || '', points: o.points || 0 }; }
+    catch (e) { return null; }
+  }).filter(x => x && x.key).sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt)));
+});
+
+/* ------------------------------------------------------------------ UPDATE CHECK (GitHub releases of this app) */
+ipcMain.handle('check-update', async () => {
+  const url = process.env.TACTIQ_UPDATE_URL || 'https://api.github.com/repos/AmartyaDasDip/voicetag/releases/latest';
+  try {
+    const { net } = require('electron');
+    const r = await net.fetch(url, { headers: { 'User-Agent': 'TACTIQ-ANALYST/' + app.getVersion(), Accept: 'application/vnd.github+json' } });
+    if (!r.ok) return { ok: false, error: 'HTTP ' + r.status };
+    const j = await r.json();
+    const asset = (j.assets || []).find(a => /TACTIQ-ANALYST-Setup-([\d.]+)\.exe$/i.test(a.name));
+    const latest = asset ? /Setup-([\d.]+)\.exe$/i.exec(asset.name)[1] : null;
+    const cmp = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); } return 0; };
+    const res = { ok: true, current: app.getVersion(), latest, newer: !!latest && cmp(latest, app.getVersion()) > 0, page: j.html_url || 'https://github.com/AmartyaDasDip/voicetag/releases/latest', published: j.published_at };
+    logLine('info', 'main', `update check: latest ${latest || '?'}${res.newer ? ' (newer than this version)' : ''}`);
+    return res;
+  } catch (err) { return { ok: false, error: String(err.message || err) }; }
 });
 ipcMain.handle('cancel-export', async () => { if (currentExport) exporter.cancel(currentExport); return true; });
 
@@ -392,7 +515,10 @@ ipcMain.handle('ai-analyse', async (e, o) => {
   const script = path.join(__dirname, 'engine', 'worker.js').replace('app.asar' + path.sep, 'app.asar.unpacked' + path.sep);
   return new Promise(resolve => {
     let done = false;
-    const finish = r => { if (done) return; done = true; try { aiProc && aiProc.kill(); } catch (er) { /* gone */ } aiProc = null; resolve(r); };
+    const finish = r => { if (done) return; done = true; try { aiProc && aiProc.kill(); } catch (er) { /* gone */ } aiProc = null;
+      if (r && r.ok === false && !/cancel/i.test(r.error || '')) logLine('error', 'ai', (o.scan ? 'shot scan' : 'analysis') + ' failed: ' + r.error);
+      else if (r && r.ok) logLine('info', 'ai', `${o.scan ? 'shot scan' : 'analysis'} ok · ${r.meta && r.meta.provider} · ${r.meta && r.meta.frames} frames in ${r.meta && r.meta.seconds} s`);
+      resolve(r); };
     try { aiProc = utilityProcess.fork(script, [], { serviceName: 'TACTIQ AI engine', stdio: 'pipe' }); }
     catch (er) { aiProc = null; return resolve({ ok: false, error: 'Could not start the AI engine: ' + er.message }); }
     let errText = '';

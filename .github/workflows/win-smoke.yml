@@ -1,0 +1,57 @@
+name: Smoke test on Windows (development branch)
+
+# Builds and installs the app on a Windows machine and runs the end-to-end smoke test, without publishing anything.
+on:
+  push:
+    branches: [v3-dev]
+  workflow_dispatch:
+
+concurrency:
+  group: win-smoke
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Restore voice model from cache
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: model/model.tar.gz
+          key: vosk-small-en-us-0.15-${{ hashFiles('tools/get-model.ps1') }}
+      - name: Download voice model
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: ./tools/get-model.ps1
+      - name: Install components
+        run: npm ci --no-audit --no-fund
+        env:
+          ONNXRUNTIME_NODE_INSTALL: skip
+      - name: Build installer
+        run: npx electron-builder --win nsis --x64 --publish never
+      - name: Install the app (silent, like a user would)
+        shell: pwsh
+        run: |
+          $inst = Get-ChildItem dist\*.exe | Select-Object -First 1
+          Write-Host "Installing $($inst.Name) (silent)"
+          Start-Process -FilePath $inst.FullName -ArgumentList '/S' -Wait
+          $exe = $null
+          for ($i = 0; $i -lt 90 -and -not $exe; $i++) {
+            $exe = @("$env:LOCALAPPDATA\Programs", "$env:ProgramFiles", "${env:ProgramFiles(x86)}") | Where-Object { Test-Path $_ } |
+              ForEach-Object { Get-ChildItem $_ -Recurse -Depth 2 -Filter 'TACTIQ ANALYST.exe' -ErrorAction SilentlyContinue } | Select-Object -First 1
+            if (-not $exe) { Start-Sleep -Seconds 2 }
+          }
+          if (-not $exe) { throw 'The installed app was not found' }
+          Write-Host "Installed: $($exe.FullName)"
+          "TACTIQ_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Smoke test of the installed app
+        shell: pwsh
+        timeout-minutes: 40
+        run: node tests/smoke/smoke.js "$env:TACTIQ_EXE"
