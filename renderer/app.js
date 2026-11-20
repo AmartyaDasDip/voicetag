@@ -1067,6 +1067,7 @@ function autosave() { dataChanged(); clearTimeout(autosaveTimer); autosaveTimer 
 // crash copy: tags etc. on every change; tracking data (can be ~100 MB) only when it changed, at most every 8 s
 const REC = { sig: {}, at: {}, size: {}, timer: null };
 function autosaveNow(flush) {
+  if (window.__loadingProject) { autosave(); return; }
   try {
     const T = typeof TR !== 'undefined', hasTrack = T && TR.tracks.length;
     const projFile = typeof project !== 'undefined' && project.file ? project.file : null;

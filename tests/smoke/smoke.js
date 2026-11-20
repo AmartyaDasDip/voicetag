@@ -64,7 +64,7 @@ async function launch() {
     ev: (fn, arg) => page.evaluate(fn, arg),
     wait: ms => page.waitForTimeout(ms),
     async waitFor(fn, ms = 20000, arg) { const t = Date.now(); while (Date.now() - t < ms) { try { if (await page.evaluate(fn, arg)) return true; } catch (e) { /* busy */ } await page.waitForTimeout(250); } return false; },
-    async shot(name) { const f = path.join(OUT, name + '.jpg'); await page.screenshot({ path: f, type: 'jpeg', quality: 45 }).catch(() => {}); if (GH && fs.existsSync(f)) console.log('SMOKE-SHOT ' + name + ' ' + fs.readFileSync(f).toString('base64')); },
+    async shot(name) { const f = path.join(OUT, name + '.jpg'); await page.screenshot({ path: f, type: 'jpeg', quality: 35 }).catch(() => {}); if (GH && fs.existsSync(f)) console.log('SMOKE-SHOT ' + name + ' ' + fs.readFileSync(f).toString('base64')); },
     async close() { const pr = app.process(); const t = setTimeout(() => { try { pr.kill(); } catch (e) { /* gone */ } }, 10000); try { await app.close(); } catch (e) { /* ignore */ } clearTimeout(t); }
   };
   return h;
@@ -197,9 +197,14 @@ const step = async (name, fn) => { const t = Date.now(); try { await fn(); } cat
     await h.ev(() => { video.currentTime = 20; }); await h.wait(300);
     await page.fill('#cmdInput', 'seven dribble'); await page.press('#cmdInput', 'Enter'); await h.wait(1500);
     const n = await h.ev(() => events.length);
-    try { h.app.process().kill('SIGKILL'); } catch (e) { /* gone */ }
-    await sleep(2500);
-    h = await launch(); page = h.page;
+    // a hard kill of the whole app (like a power cut or "End task" in Task Manager)
+    const pid = h.app.process().pid;
+    if (process.platform === 'win32') { try { execFileSync('taskkill', ['/F', '/T', '/PID', String(pid)], { stdio: 'pipe' }); } catch (e) { /* already gone */ } }
+    else { try { h.app.process().kill('SIGKILL'); } catch (e) { /* gone */ } }
+    for (let i = 0; i < 30; i++) { await sleep(500); if (process.platform !== 'win32') break; try { if (!/TACTIQ ANALYST\.exe/i.test(execFileSync('tasklist', ['/FI', 'IMAGENAME eq TACTIQ ANALYST.exe'], { stdio: 'pipe' }).toString())) break; } catch (e) { break; } }
+    await sleep(1500);
+    try { h = await launch(); } catch (e) { console.log('INFO relaunch failed once: ' + e.message.split('\n')[0]); await sleep(4000); h = await launch(); }
+    page = h.page;
     const asked = await h.waitFor(() => !document.querySelector('#dlg').classList.contains('hidden') && /did not close properly/.test(document.querySelector('#dlgTitle').textContent), 60000);
     check('after the app was killed it offers to restore the work', asked);
     if (asked) { await page.click('#dlgFoot .primary'); check('unsaved tag restored', await h.waitFor(n => project.file && events.length === n, 60000, n), await h.ev(() => events.length)); }

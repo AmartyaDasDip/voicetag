@@ -203,6 +203,12 @@ async function openProjectData(p, path, askConfig = true) {
   const evs = normaliseEvents(p.events);
   const m = Object.assign(EMPTY_MATCH(), p.match || {});
   autosaveNow();
+  // until the caller has set the project, automatic copies would go to the wrong place
+  window.__loadingProject = true;
+  try { return await openProjectDataInner(p, path, evs, m); } finally { setTimeout(() => { window.__loadingProject = false; }, 0); }
+}
+async function openProjectDataInner(p, path, evs, m) {
+  window.__loadingProject = true;
   events = evs; nextId = p.nextId || (Math.max(0, ...evs.map(x => x.id)) + 1); undoStack = []; open = {}; match = m; locAsk = null;
   target = { kind: null, id: null, seq: 0 };
   live.on = false; live.running = false;
