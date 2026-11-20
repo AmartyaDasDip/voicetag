@@ -1,5 +1,41 @@
 # TACTIQ ANALYST – changelog
 
+## 2.4.0 – full end-to-end test with the Spain v England clips, bug fixes, calibration that follows the camera
+
+Tested by driving the real desktop app (Electron, real ffmpeg, real AI engine, real offline voice model fed with
+synthesised speech) through every feature with the uploaded clips: 97 automated checks.
+
+### Fixed
+- **Critical:** in the installed app the start-up script stopped with "Identifier 'api' has already been declared"
+  (the browser test fallback re-declared the bridge from preload.js). Depending on the version the dashboard,
+  code buttons and most features did not work. The bridge is now only created when it is missing.
+- Start-up: the last project was silently loaded as a "quick session" without video; the app now always opens on
+  the dashboard, projects keep their own crash-safety copy, and an unsaved quick session is offered as
+  "Continue last session". The quick-session button says "Back to <project>" when a project is open.
+- Undo after ending a phase (e.g. "build up" … "build up", then "undo") removed the whole phase; it now goes back
+  to "running".
+- Voice: a control word straight after a command ("left back cross … undo") is now carried out; a fragment the
+  engine could not make out ("right [unk]") no longer changes the previous tag.
+- Voice: a bare shirt number is understood ("nine shot on target", "twenty three pass"), as the documentation said,
+  unless the word is needed elsewhere ("one" = "won").
+- Ctrl+S now saves while the cursor is in the command bar or a field.
+- Backups: the newest backup is preselected, so Restore works straight away.
+- Season tab and Open dialogs accept .tactiq project files.
+- Short gaps between AI points (the AI looks at every 2nd frame) were counted as "estimated": the ball panel showed
+  30% found instead of 50%, markers flickered dashed/solid while playing, and heat maps weighted them down.
+  Only gaps over 0.3 s count as estimated now.
+- Remaining "VoiceTag" texts on screen renamed.
+- Windows build now checks that the bundled ffmpeg reads and converts MTS (camcorder) and AVI files.
+
+### Improved
+- **Calibration that follows the camera.** The AI engine measures the camera pan for every analysed frame and
+  detects camera cuts. A calibration is carried along with the pan (and backwards before the first one), and between
+  two calibrations both are carried and blended. Spain v England test, 3 s and 13% of a frame width away from the
+  calibration: error 9.2 m → 2.3 m with one calibration, 0.9 m with two (5 s apart); the share of usable
+  (calibrated) time in the Positions tab went from 10–40% to 100%. Error estimate shown in the Track and Positions tabs;
+  carrying stops at cuts and beyond 4 m estimated error.
+- **Calibration assistant:** a new calibration starts with the landmarks already placed from the camera movement.
+
 ## 2.3.0 – roadmap phases 0.6 (hybrid tracking editor) and 0.7 (2D analytics)
 
 ### 0.6 – correct AI tracking without losing the AI result

@@ -66,7 +66,7 @@ function renderBallPanel() {
   const [a, b] = ballSpan(tk);
   let det = 0, man = 0, est = 0, miss = 0;
   const fd = Math.max(frameDur(), 0.04);
-  for (let t = a; t <= b; t += 0.2) { const q = ballAt(t, tk); if (!q) miss++; else if (q.kind === 'interp') est++; else if (q.src === 'manual') man++; else det++; }
+  for (let t = a; t <= b; t += 0.2) { const q = ballAt(t, tk); if (!q) miss++; else if (isEstimate(q)) est++; else if (q.src === 'manual') man++; else det++; }
   const n = det + man + est + miss || 1, pc = v => Math.round(v / n * 100);
   const pos = possession(a, b);
   box.innerHTML = `<div class="ballpanel">
@@ -94,7 +94,7 @@ function drawBallStrip(tk, a, b, pos) {
   for (let x = 0; x < W; x++) {
     const t = a + (x + 0.5) / W * span, q = ballAt(t, tk);
     if (!q) continue;
-    ctx.fillStyle = q.kind === 'interp' ? '#f5b041' : '#2ecc71'; ctx.fillRect(x, 0, 1, 16);
+    ctx.fillStyle = isEstimate(q) ? '#f5b041' : '#2ecc71'; ctx.fillRect(x, 0, 1, 16);
   }
   ctx.fillStyle = '#222'; ctx.fillRect(0, 18, W, 12);
   if (pos) pos.segs.forEach(s => { ctx.fillStyle = teamColor(s.team); const x0 = (s.t0 - a) / span * W, x1 = (s.t1 - a) / span * W; ctx.fillRect(x0, 18, Math.max(1, x1 - x0), 12); });

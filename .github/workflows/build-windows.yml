@@ -47,6 +47,9 @@ jobs:
         env:
           ONNXRUNTIME_NODE_INSTALL: skip
 
+      - name: Check the bundled ffmpeg reads and converts MTS / AVI
+        run: node tools/check-ffmpeg.js
+
       - name: Check AI engine loads
         run: node -e "const o=require('onnxruntime-node');o.InferenceSession.create('engine/models/yolo11n.onnx').then(s=>console.log('AI model OK',s.inputNames,s.outputNames))"
 

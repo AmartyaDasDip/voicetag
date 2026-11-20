@@ -76,15 +76,67 @@ function calQuality(cal) {
   return { label: 'poor (' + rmse.toFixed(1) + ' m error)', cls: 'poor', rmse };
 }
 const sortedCals = () => TR.cals.slice().sort((a, b) => a.t - b.t);
+/* ---- camera movement (measured by the AI engine) carries a calibration through camera pans.
+   TR.camera = [{ id, pts: [[t, x, y], ...] }]: one entry per camera shot (a cut starts a new one); x, y = how far
+   the picture content has moved (fractions of the frame) since the start of that shot. */
+function camAt(t) {
+  const segs = TR.camera || [];
+  for (let s = segs.length - 1; s >= 0; s--) {
+    const p = segs[s].pts; if (!p.length || t < p[0][0] - 0.06 || t > p[p.length - 1][0] + 0.06) continue;
+    let lo = 0, hi = p.length - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (p[m][0] <= t) lo = m; else hi = m; }
+    const a = p[lo], b = p[hi], w = b[0] > a[0] ? clamp((t - a[0]) / (b[0] - a[0]), 0, 1) : 0;
+    return { seg: segs[s].id, x: a[1] + (b[1] - a[1]) * w, y: a[2] + (b[2] - a[2]) * w };
+  }
+  return null;
+}
+// image point now = image point at calibration time + d  ->  pitch = H(x - dx, y - dy)
+const shiftH = (H, d) => [H[0], H[1], H[2] - H[0] * d[0] - H[1] * d[1], H[3], H[4], H[5] - H[3] * d[0] - H[4] * d[1], H[6], H[7], H[8] - H[6] * d[0] - H[7] * d[1]];
+const normH = H => H.map(v => v / (H[8] || 1));
+const mpwCache = new WeakMap();
+// metres of pitch across the whole frame width at the picture centre (scales the error estimate)
+function metresPerWidth(c) {
+  if (mpwCache.has(c)) return mpwCache.get(c);
+  const a = applyH(c.H, 0.45, 0.5), b = applyH(c.H, 0.55, 0.5);
+  const v = a && b ? Math.hypot(a[0] - b[0], a[1] - b[1]) * 10 : 80; mpwCache.set(c, v); return v;
+}
+// error of a carried calibration, from the Spain v England test: about 20% of the distance the camera panned
+const carryErr = (c, d) => 0.2 * Math.hypot(d[0], d[1] * 0.56) * metresPerWidth(c);
+const CARRY_MAX_ERR = 4;   // metres – beyond this a carried calibration is not used
 // calibration valid at time t (segment = from this calibration until the next one)
 function calAt(t) {
   const cs = sortedCals();
   let i = -1;
   for (let k = 0; k < cs.length; k++) if (cs[k].t <= t + 1e-6) i = k;
-  if (i < 0) return null;
+  if (i < 0) {
+    // before the first calibration: carry the first one backwards along the camera movement (same shot only)
+    const f = cs[0];
+    if (!f || f.type === 'none' || !f.H || TR.settings.followCam === false || !(TR.camera || []).length) return null;
+    const ct = camAt(t), cf = camAt(f.t);
+    if (!ct || !cf || ct.seg !== cf.seg) return null;
+    const d = [ct.x - cf.x, ct.y - cf.y], err = carryErr(f, d) + 0.15;
+    return err <= CARRY_MAX_ERR ? { H: normH(shiftH(f.H, d)), cal: f, carried: true, err } : null;
+  }
   const c = cs[i];
   if (c.type === 'none' || !c.H) return null;
   const n = cs[i + 1];
+  if (TR.settings.followCam !== false && TR.camera && TR.camera.length) {
+    const ct = camAt(t);
+    if (ct) {
+      const ca = camAt(c.t), cb = n && n.type !== 'none' && n.H ? camAt(n.t) : null;
+      const A = ca && ca.seg === ct.seg ? { d: [ct.x - ca.x, ct.y - ca.y] } : null;
+      const B = cb && cb.seg === ct.seg ? { d: [ct.x - cb.x, ct.y - cb.y] } : null;
+      if (A) { A.H = normH(shiftH(c.H, A.d)); A.err = carryErr(c, A.d); }
+      if (B) { B.H = normH(shiftH(n.H, B.d)); B.err = carryErr(n, B.d); }
+      if (A && B) {     // carried forward from this calibration and back from the next one, blended by time
+        const w = clamp((t - c.t) / (n.t - c.t), 0, 1);
+        const err = Math.min(A.err, B.err) * 0.6 + 0.15;
+        return { H: A.H.map((v, k) => v * (1 - w) + B.H[k] * w), cal: c, carried: true, between: n, err };
+      }
+      if (A) return A.err <= CARRY_MAX_ERR ? { H: A.H, cal: c, carried: Math.hypot(A.d[0], A.d[1]) > 0.002, err: A.err + 0.15 } : null;
+      if (B && B.err <= CARRY_MAX_ERR) return { H: B.H, cal: n, carried: true, err: B.err + 0.15 };
+    }
+  }
   if (c.blend && n && n.type !== 'none' && n.H && n.t > c.t) {
     const a = clamp((t - c.t) / (n.t - c.t), 0, 1);
     return { H: c.H.map((v, k) => v * (1 - a) + n.H[k] * a), cal: c, blended: true };
@@ -111,6 +163,7 @@ function trackShort(tk) {
 function newTrack(o) { const tk = Object.assign({ id: uid(), kind: 'player', team: 'Home', playerId: '', label: '', color: '', interp: true, points: [] }, o); TR.tracks.push(tk); return tk; }
 function findIdx(pts, t) { let lo = 0, hi = pts.length - 1, r = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (pts[m].t <= t + 1e-6) { r = m; lo = m + 1; } else hi = m - 1; } return r; }
 // position of a track at time t: a keyframe, an interpolated point, a status, or null (unknown)
+const isEstimate = q => !!q && q.kind === 'interp' && !(q.gap <= 0.3);   // true only for real gaps
 function posAt(tk, t) {
   const pts = tk.points, fd = frameDur();
   if (!pts.length) return null;
@@ -122,7 +175,9 @@ function posAt(tk, t) {
   if (prev.vis !== 'v') return { kind: 'status', vis: prev.vis, t: prev.t };
   if (next && next.vis === 'v' && TR.settings.interp && tk.interp !== false && next.t - prev.t <= Number(tk.maxGap || TR.settings.maxGap || 3)) {
     const a = (t - prev.t) / (next.t - prev.t);
-    return { kind: 'interp', x: prev.x + (next.x - prev.x) * a, y: prev.y + (next.y - prev.y) * a, t, src: 'interp', vis: 'v' };
+    // gap = distance between the two known points: a few hundredths of a second (AI looking at every 2nd frame)
+    // is as good as a keyframe; only longer gaps are real estimates
+    return { kind: 'interp', x: prev.x + (next.x - prev.x) * a, y: prev.y + (next.y - prev.y) * a, t, src: 'interp', vis: 'v', gap: next.t - prev.t, conf: prev.conf != null && next.conf != null ? Math.min(prev.conf, next.conf) : undefined, fromAi: prev.src === 'ai' || next.src === 'ai' };
   }
   return null;
 }
@@ -206,7 +261,7 @@ function drawTrackingOverlay(ctx, W, H, forExport) {
     }
     const x = p.x * W, y = p.y * H, col = trackColor(tk);
     ctx.save();
-    if (p.kind === 'interp') { ctx.globalAlpha = 0.65; ctx.setLineDash([4, 3]); }
+    if (isEstimate(p)) { ctx.globalAlpha = 0.65; ctx.setLineDash([4, 3]); }
     else if (p.src === 'ai' && p.conf != null && p.conf < 0.4) { ctx.globalAlpha = 0.7; ctx.setLineDash([2, 2]); }
     if (tk.kind === 'ball') {
       ctx.beginPath(); ctx.arc(x, y, r * 0.55, 0, Math.PI * 2); ctx.fillStyle = col; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#000'; ctx.stroke();
@@ -367,6 +422,10 @@ function renderTrackTab() {
     <div class="toolbar"><button class="small" id="tkAddSquad">+ Players from squad</button><button class="small" id="tkAddH">+ Unknown ${esc(teamName('Home'))}</button><button class="small" id="tkAddA">+ Unknown ${esc(teamName('Away'))}</button><button class="small" id="tkAddBall">+ Ball</button><button class="small" id="tkAddRef">+ Referee</button></div>
     ${list || '<p class="muted small">No tracks yet. Add players or the ball, select one, turn tracking on, then click the player’s feet on the video.</p>'}
     <h4>Pitch calibration ${needCal ? '<span class="badge poor">needed for 2D / metres</span>' : ''}</h4>
+    ${(() => { const c = hasVideo() ? calAt(t) : null; const camOk = (TR.camera || []).length > 0;
+      const now = !c ? '<span class="badge poor">none at this moment</span>' : c.carried ? `<span class="badge ${c.err < 1.5 ? 'good' : 'ok'}">↔ follows the camera${c.between ? ' (between ' + fmtTime(c.cal.t) + ' and ' + fmtTime(c.between.t) + ')' : ' from ' + fmtTime(c.cal.t)} · ±${c.err.toFixed(1)} m</span>` : `<span class="badge good">🎯 ${c.blended ? 'blended' : 'set'} at ${fmtTime(c.cal.t)}</span>`;
+      return `<div class="toolbar small">At ${fmtTime(t)}: ${now}
+        <label title="The AI measures how the camera pans; a calibration is carried along with it (and blended between two calibrations). Run 🤖 Auto-detect over the part you want to use."><input type="checkbox" id="tkFollow" ${TR.settings.followCam !== false ? 'checked' : ''} ${camOk ? '' : 'disabled'}> calibration follows the camera ${camOk ? '' : '(after an AI run)'}</label></div>`; })()}
     <p class="small muted">Click 4+ known pitch points (corners, box, halfway line…) on a video frame. Each calibration is valid from its time until the next one. Add a new one when the camera moves or cuts; use ⛔ for close-ups or replays.</p>
     <div class="toolbar"><button class="small primary" id="tkCal">🎯 Calibrate at this frame</button><button class="small" id="tkNoCal">⛔ No calibration from here</button></div>
     ${cals || '<p class="muted small">No calibration yet.</p>'}
@@ -380,6 +439,7 @@ function renderTrackTab() {
   el.querySelector('#tkLines').onchange = e => { s.showLines = e.target.checked; paintTracking(true); };
   el.querySelector('#tkAll').onchange = e => { s.showAll = e.target.checked; paintTracking(true); };
   el.querySelector('#tkOv').onchange = e => { s.overlay = e.target.checked; paintTracking(true); };
+  const fc = el.querySelector('#tkFollow'); if (fc) fc.onchange = e => { s.followCam = e.target.checked; markDirty(); autosave(); renderTrackTab(); paintTracking(true); render2D(true); };
   el.querySelectorAll('[data-vis]').forEach(x => x.onclick = () => { const k = selTrack(); if (!k) return; checkpoint(); setPoint(k, video.currentTime, { vis: x.dataset.vis, x: null, y: null, src: 'manual' }); autosave(); renderTrackTab(); paintTracking(true); if (TR.settings.autoAdvance) advance(1); });
   b('#tkHold', () => { const k = selTrack(); if (!k) return; const i = findIdx(k.points, video.currentTime - frameDur() * 0.6), last = k.points.slice(0, i + 1).reverse().find(q => q.vis === 'v'); if (!last) { toast('No earlier position', 'bad'); return; } checkpoint(); setPoint(k, video.currentTime, { x: last.x, y: last.y, src: 'manual', vis: 'v' }); autosave(); renderTrackTab(); paintTracking(true); if (TR.settings.autoAdvance) advance(1); });
   b('#tkDelPt', () => { const k = selTrack(); if (!k) return; checkpoint(); if (!deletePoint(k, video.currentTime)) History.past.pop(); autosave(); renderTrackTab(); paintTracking(true); });
@@ -461,11 +521,14 @@ function openCalibration(existing) {
   const prevCal = sortedCals().filter(c => c.type !== 'none' && c.t <= video.currentTime && (!existing || c.id !== existing.id)).pop();
   const st = { points: existing ? JSON.parse(JSON.stringify(existing.points)) : [], active: null, blend: existing ? !!existing.blend : false, t: existing ? existing.t : Math.round(video.currentTime * 100) / 100, drag: null };
   const frame = document.createElement('canvas'); frame.width = video.videoWidth; frame.height = video.videoHeight; frame.getContext('2d').drawImage(video, 0, 0);
+  // where the pitch landmarks should be, according to the calibration carried along with the camera
+  const here = existing ? null : calAt(st.t), carriedHere = here && here.carried ? here : null;
+  const predicted = () => { const Hi = inv3(carriedHere.H); if (!Hi) return []; return LM.map(l => { const r = applyH(Hi, l.X, l.Y); return r && r[2] > 0 && r[0] > 0.03 && r[0] < 0.97 && r[1] > 0.03 && r[1] < 0.97 ? { lm: l.id, img: [r[0], r[1]], pitch: [l.X, l.Y] } : null; }).filter(Boolean); };
   const html = `<div class="calwrap"><div><canvas id="calCv"></canvas><div class="small muted" id="calHint"></div></div>
     <div><div id="calPitch"></div><div class="lmlist" id="calList"></div>
       <div class="toolbar" style="margin-top:6px"><span id="calQ" class="badge"></span><span class="small muted" id="calN"></span></div>
       <div class="toolbar small"><label><input type="checkbox" id="calBlend" ${st.blend ? 'checked' : ''}> blend smoothly to the next calibration (slow camera pan)</label></div>
-      <div class="toolbar">${prevCal && !existing ? '<button class="small" id="calCopy">Start from previous calibration’s points</button>' : ''}<button class="small" id="calClear">Clear points</button></div>
+      <div class="toolbar">${carriedHere ? '<button class="small" id="calAuto">Place points from the camera movement</button>' : ''}${prevCal && !existing ? '<button class="small" id="calCopy">Start from previous calibration’s points</button>' : ''}<button class="small" id="calClear">Clear points</button></div>
       <p class="small muted">1. Pick a point on the pitch (list or dot). 2. Click that spot in the video frame. Drag points to adjust; right-click a point to remove it. 4 points minimum – 6+ spread across the visible pitch is best. Valid from <b>${fmtTime(st.t)}</b> until the next calibration.</p></div></div>`;
   let saved = false;
   Dlg.open('🎯 Pitch calibration at ' + fmtTime(st.t), html, [{ label: 'Cancel' }, { label: 'Save calibration', primary: true, value: 'ok', onClick: () => { if (st.points.length < 4) { alert('At least 4 points are needed.'); return false; } saved = true; } }], { wide: true, focus: false, onOpen: body => {
@@ -505,6 +568,9 @@ function openCalibration(existing) {
     window.addEventListener('mouseup', () => { st.drag = null; });
     body.querySelector('#calBlend').onchange = e => { st.blend = e.target.checked; };
     body.querySelector('#calClear').onclick = () => { st.points = []; redraw(); };
+    const ca = body.querySelector('#calAuto');
+    if (ca) { ca.onclick = () => { st.points = predicted(); redraw(); };
+      if (!st.points.length) { st.points = predicted(); if (st.points.length) setTimeout(() => toast(`${st.points.length} points placed from the camera movement (±${carriedHere.err.toFixed(1)} m) – drag any that are off, then save`, 'info', 5000), 300); } }
     const cp = body.querySelector('#calCopy'); if (cp) cp.onclick = () => { st.points = JSON.parse(JSON.stringify(prevCal.points)); redraw(); toast('Previous points copied – drag them onto the right spots', 'info', 3000); };
     window.__calState = st; window.__calH = H;
     redraw();
@@ -545,7 +611,7 @@ function render2D(force) {
     if (!p || p.kind === 'status') return;
     const m = toPitch(t, p.x, p.y); if (!m) return;
     shown++;
-    const interp = p.kind === 'interp', col = trackColor(tk);
+    const interp = isEstimate(p), col = trackColor(tk);
     if (tk.kind === 'ball') inner += `<circle cx="${m[0].toFixed(2)}" cy="${m[1].toFixed(2)}" r=".9" fill="${esc(col)}" stroke="#000" stroke-width=".25" opacity="${interp ? .6 : 1}"/>`;
     else inner += `<g opacity="${interp ? .6 : 1}"><circle cx="${m[0].toFixed(2)}" cy="${m[1].toFixed(2)}" r="1.7" fill="${esc(col)}" stroke="${tk.id === TR.sel ? '#2ecc71' : '#000'}" stroke-width="${tk.id === TR.sel ? .6 : .25}" ${interp ? 'stroke-dasharray=".6 .4"' : ''}/>
       <text x="${m[0].toFixed(2)}" y="${(m[1] + 0.75).toFixed(2)}" font-size="2" text-anchor="middle" fill="#fff" font-weight="700">${esc(trackShort(tk))}</text></g>`;

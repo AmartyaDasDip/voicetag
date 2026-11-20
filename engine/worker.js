@@ -92,10 +92,10 @@ async function analyse(o, progress) {
   const ZOOM = 2.2, zcw = w / ZOOM, zch = h / ZOOM;            // ball-pass window in analysis pixels
   const zow = IN_W, zoh = Math.min(IN_H, Math.round(IN_W * zch / zcw));
   const zTensor = ballMode === 'zoom' ? new Float32Array(3 * IN_W * IN_H) : null;
-  let est = null, zoomHits = 0, zoomOnly = 0, refThumb = null, refCam = [0, 0], camX = 0, camY = 0;
+  let est = null, zoomHits = 0, zoomOnly = 0, refThumb = null, refCam = [0, 0], camX = 0, camY = 0, prevThumb = null, camSeg = 0, cuts = 0, lastStep = [0, 0];
   const tracker = new Tracker({ maxAge: Math.round(30 / stride), minHits: 3 });
   const tensorData = new Float32Array(3 * IN_W * IN_H);
-  const ballFrames = [];
+  const ballFrames = [], camera = [];
   let k = 0, t0 = Date.now(), dets = 0;
   try {
     for (;;) {
@@ -105,8 +105,16 @@ async function analyse(o, progress) {
       const frame = native ? resample(big, rw, rh, 0, 0, rw, rh, w, h, small, false) : big;
       toTensor(frame, w, h, tensorData);
       // camera position (cumulative pan) so the ball path can tell a still object from a moving camera
-      const thumb = ballMode === 'off' ? null : greyThumb(frame, w, h);
+      const thumb = greyThumb(frame, w, h);   // always: the app uses the camera movement to carry calibrations
       if (thumb) {
+        // a camera cut (the picture no longer matches the previous frame) starts a new camera segment
+        // (similar wide shots can match fairly well, but the picture then 'jumps' – a pan never does that)
+        if (prevThumb) {
+          const cs = cameraShift(prevThumb, thumb), jump = Math.abs(cs[0] - lastStep[0]) + Math.abs(cs[1] - lastStep[1]);
+          if (cs[2] > 12 || (cs[2] > 6 && jump > 8)) { camSeg++; cuts++; refThumb = null; refCam = [0, 0]; lastStep = [0, 0]; }
+          else lastStep = [cs[0], cs[1]];
+        }
+        prevThumb = thumb;
         // measured against a reference frame (not the previous one) so small pans do not get lost in rounding
         const sh = cameraShift(refThumb, thumb);
         camX = refCam[0] + sh[0] / TW; camY = refCam[1] + sh[1] / TH;
@@ -164,6 +172,7 @@ async function analyse(o, progress) {
         }
       }
       ballFrames.push({ k, cands, feet, cam: [camX, camY] });
+      camera.push([camX, camY, camSeg]);
       k++;
       if (progress && (k % 3 === 0 || k === 1)) { const el = (Date.now() - t0) / 1000; progress({ done: k, total, speed: k / el, eta: (total - k) / (k / el) }); }
     }
@@ -187,6 +196,9 @@ async function analyse(o, progress) {
   if (process.env.BALLDEBUG) fs.writeFileSync(process.env.BALLDEBUG, JSON.stringify(ballFrames.map(f => ({ k: f.k, cam: f.cam, c: f.cands.map(c => [c.x, c.y, c.conf, c.wx, c.wy, c.near, c.still ? 1 : 0].map(v => Math.round(v * 1000) / 1000)) }))));
   const el = (Date.now() - t0) / 1000;
   return { ok: true, tracks, ball: balls.map(b => ({ t: tOf(b.k), x: Math.round(b.x * 10000) / 10000, y: Math.round(b.y * 10000) / 10000, conf: Math.round(b.conf * 100) / 100 })),
+    // camera movement per analysed frame (picture content shift, in fractions of the frame), for carrying calibrations
+    camera: camera.map((c, f) => [tOf(f), Math.round(c[0] * 1e5) / 1e5, Math.round(c[1] * 1e5) / 1e5, c[2]]),
+    cameraCuts: cuts,
     clusters: cl ? cl.centres.map(c => c.map(Math.round)) : null,
     ballStats: { mode: ballMode, frames: k, found: balls.length, coverage: Math.round(balls.length / Math.max(1, k) * 1000) / 10, zoomHits, zoomOnly, fromZoom: balls.filter(b => b.z === 1).length, readSize: [rw, rh] },
     meta: { timing: reader.times.length >= k ? 'frame timestamps' : 'frame rate', model: path.basename(o.model), provider, frames: k, stride, fps, seconds: Math.round(el * 10) / 10, framesPerSecond: Math.round(k / el * 10) / 10, detections: dets, analysisSize: [w, h], start: o.start || 0, duration: o.duration } };

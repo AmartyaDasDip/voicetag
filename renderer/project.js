@@ -103,7 +103,7 @@ $('#btnBackups').onclick = async () => {
   if (!list.length) { alert('No backups yet. A backup is made automatically every 10 minutes while you work.'); return; }
   let pick = null;
   await Dlg.open('⟲ Restore a backup', `<p class="small muted">Backups of <b>${esc(project.info.name)}</b> (newest first). Restoring replaces the current tags; your current state is backed up first.</p>
-    <select id="bkSel" size="12" style="width:100%">${list.map(f => `<option value="${esc(f)}">${esc(f.split(/[\\/]/).pop().replace('project-', '').replace('.tactiq', '').replace('T', '  '))}</option>`).join('')}</select>`,
+    <select id="bkSel" size="12" style="width:100%">${list.map((f, i) => `<option value="${esc(f)}" ${i === 0 ? 'selected' : ''}>${esc(f.split(/[\\/]/).pop().replace('project-', '').replace('.tactiq', '').replace('T', '  '))}</option>`).join('')}</select>`,
   [{ label: 'Cancel' }, { label: 'Restore', primary: true, value: 'ok', onClick: () => { pick = $('#bkSel').value; if (!pick) return false; } }]).then(async r => {
     if (r !== 'ok' || !pick) return;
     await writeProjectFile(true);
@@ -163,7 +163,7 @@ async function openProjectForm(mode) {   // mode: 'new' | 'edit' | 'save' | 'sav
   if (mode === 'edit') { checkpoint(); project.info = i; syncProjectToApp(); markDirty(); renderAll(); return true; }
   if (mode === 'new') {
     const keepTags = events.length && true;
-    if (!keepTags) { events = []; nextId = 1; open = {}; match = EMPTY_MATCH(); TR.tracks = []; TR.cals = []; clips = []; }
+    if (!keepTags) { events = []; nextId = 1; open = {}; match = EMPTY_MATCH(); TR.tracks = []; TR.cals = []; TR.camera = []; TR.log = []; clips = []; }
     History.clear();
   }
   project.info = i;
@@ -216,7 +216,7 @@ $('#dCont').onclick = async () => {
   const s = window.__lastSession; window.__lastSession = null; hideDashboard(); if (!s) return;
   if (s.video && s.video.path && api.registerMedia) { const r = await api.registerMedia(s.video.path).catch(() => null); if (r) await loadVideo(r, true); else toast('The video of that session was not found: ' + s.video.name, 'bad', 4000); }
   events = s.events || []; nextId = s.nextId || (Math.max(0, ...events.map(e => e.id)) + 1); if (s.match) match = Object.assign(EMPTY_MATCH(), s.match);
-  if (typeof TR !== 'undefined') { TR.tracks = s.tracks || []; TR.cals = s.cals || []; TR.log = s.trlog || []; }
+  if (typeof TR !== 'undefined') { TR.tracks = s.tracks || []; TR.cals = s.cals || []; TR.log = s.trlog || []; TR.camera = s.camera || []; }
   if (typeof clips !== 'undefined') clips = s.clips || [];
   History.clear(); renderAll(); toast('Session restored', 'ok');
 };

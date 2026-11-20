@@ -176,7 +176,7 @@ function projectObject() {
     project: { info: typeof project !== 'undefined' ? project.info : {} },
     video: { path: videoInfo.path, name: videoInfo.name, size: videoInfo.size, meta: videoMeta },
     match, config, events, nextId, curTeam,
-    tracking: typeof TR !== 'undefined' ? { tracks: TR.tracks, cals: TR.cals, settings: TR.settings, log: TR.log || [] } : null,
+    tracking: typeof TR !== 'undefined' ? { tracks: TR.tracks, cals: TR.cals, settings: TR.settings, log: TR.log || [], camera: TR.camera || [] } : null,
     clips: typeof clips !== 'undefined' ? clips : [] };
 }
 $('#btnSaveProj').onclick = async () => {
@@ -190,7 +190,7 @@ function normaliseEvents(list) {
     e, { start: e.start != null ? e.start : Math.max(0, e.t - 5), end: e.end != null ? e.end : e.t + 5 }));
 }
 async function openProjectData(p, path, askConfig = true) {
-  if (p.app !== 'VoiceTag' || !Array.isArray(p.events)) throw new Error('This is not a VoiceTag project file.');
+  if (p.app !== 'VoiceTag' || !Array.isArray(p.events)) throw new Error('This is not a TACTIQ ANALYST / VoiceTag project file.');
   if (p.config && (!askConfig || confirm('Also load the buttons / players / settings saved in this project?\n(Cancel = keep your current settings)'))) {
     config = migrate(JSON.parse(JSON.stringify(p.config))); saveConfig(); VOC = buildVocab(config); Voice.refreshVocabulary();
   }
@@ -201,7 +201,7 @@ async function openProjectData(p, path, askConfig = true) {
   target = { kind: null, id: null, seq: 0 };
   live.on = false; live.running = false;
   curTeam = p.curTeam || 'Home';
-  if (typeof TR !== 'undefined') { TR.tracks = (p.tracking && p.tracking.tracks) || []; TR.cals = (p.tracking && p.tracking.cals) || []; TR.log = (p.tracking && p.tracking.log) || []; if (p.tracking && p.tracking.settings) Object.assign(TR.settings, p.tracking.settings); TR.sel = null; }
+  if (typeof TR !== 'undefined') { TR.tracks = (p.tracking && p.tracking.tracks) || []; TR.cals = (p.tracking && p.tracking.cals) || []; TR.log = (p.tracking && p.tracking.log) || []; TR.camera = (p.tracking && p.tracking.camera) || []; if (p.tracking && p.tracking.settings) Object.assign(TR.settings, p.tracking.settings); TR.sel = null; }
   if (typeof clips !== 'undefined') clips = p.clips || [];
   let loaded = false;
   if (p.video && p.video.path && api.isDesktop) {

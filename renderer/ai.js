@@ -160,6 +160,13 @@ function aiImport(res, ch) {
     const add = res.ball.map(b => ({ t: qt(b.t), x: b.x, y: b.y, src: 'ai', vis: 'v', conf: b.conf })).filter(p => !keep.some(q => Math.abs(q.t - p.t) < fd * 0.51));
     tk.points = keep.concat(add).sort((a, b) => a.t - b.t);
   }
+  // camera movement of this run (one segment per shot) – lets calibrations follow the camera
+  if (res.camera && res.camera.length) {
+    if (!TR.camera) TR.camera = [];
+    TR.camera = TR.camera.map(sg => ({ id: sg.id, pts: sg.pts.filter(p => p[0] < t0 - 0.01 || p[0] > t1 + 0.01) })).filter(sg => sg.pts.length > 1);
+    const bySeg = new Map(); res.camera.forEach(p => { const k = run + ':' + (p[3] || 0); if (!bySeg.has(k)) bySeg.set(k, []); bySeg.get(k).push([p[0], p[1], p[2]]); });
+    bySeg.forEach((pts, id) => { if (pts.length > 1) TR.camera.push({ id, pts }); });
+  }
   const gks = ch.gk && typeof findGoalkeepers === 'function' ? applyGoalkeepers(findGoalkeepers(), true) : 0;
   TR.settings.showAll = true; TR.settings.overlay = true;
   if (Number(TR.settings.maxGap) < 1) TR.settings.maxGap = 1;

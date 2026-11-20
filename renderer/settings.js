@@ -224,7 +224,7 @@ $('#setBody').addEventListener('click', async e => {
     return;
   }
   const te = e.target.closest('[data-texp]');
-  if (te) { const t = userTemplates()[Number(te.dataset.texp)]; if (t) api.saveFile({ defaultName: t.name + '.vttemplate', filters: [{ name: 'VoiceTag template', extensions: ['vttemplate'] }], data: JSON.stringify(Object.assign({ app: 'VoiceTag-template' }, t), null, 1) }); return; }
+  if (te) { const t = userTemplates()[Number(te.dataset.texp)]; if (t) api.saveFile({ defaultName: t.name + '.vttemplate', filters: [{ name: 'TACTIQ template', extensions: ['vttemplate'] }], data: JSON.stringify(Object.assign({ app: 'VoiceTag-template' }, t), null, 1) }); return; }
   const td = e.target.closest('[data-tdel]');
   if (td) { if (confirm('Delete this template?')) { const l = userTemplates(); l.splice(Number(td.dataset.tdel), 1); saveUserTemplates(l); renderSettings(); } return; }
   if (e.target.id === 'tplSave') {
@@ -233,7 +233,7 @@ $('#setBody').addEventListener('click', async e => {
     return;
   }
   if (e.target.id === 'tplImport') {
-    const f = await api.openTextFile({ filters: [{ name: 'VoiceTag template', extensions: ['vttemplate', 'json'] }] });
+    const f = await api.openTextFile({ filters: [{ name: 'TACTIQ template', extensions: ['vttemplate', 'json'] }] });
     if (!f) return;
     try { const t = JSON.parse(f.text); if (!Array.isArray(t.codes)) throw new Error('Not a template file'); delete t.app; const l = userTemplates().filter(x => x.name !== t.name); l.push(t); saveUserTemplates(l); renderSettings(); toast('Template imported', 'info'); }
     catch (err) { alert('Could not import: ' + err.message); }

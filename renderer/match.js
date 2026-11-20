@@ -126,7 +126,7 @@ function openSubDialog() {
   const opts = list => '<option value="">—</option>' + list.map(p => `<option value="${p.id}">${esc((homeAway(p) === 'Away' ? '(opp) ' : '') + playerLabel(p) + (p.name ? ' – ' + p.name : ''))}</option>`).join('');
   let off = '', onId = '';
   Dlg.open('⇄ Substitution at ' + (matchClock(t) || fmtTime(t)), `
-    ${on ? '' : '<p class="small warn">Tip: set the Starting XI in 📋 Match so VoiceTag knows who is on the pitch and can count minutes played.</p>'}
+    ${on ? '' : '<p class="small warn">Tip: set the Starting XI in 📋 Match so the app knows who is on the pitch and can count minutes played.</p>'}
     <div class="formgrid"><label>Player OFF ⬇</label><select id="subOff">${opts(offList)}</select><label>Player ON ⬆</label><select id="subOn">${opts(onList)}</select></div>`,
   [{ label: 'Cancel' }, { label: 'Save substitution', primary: true, value: 'ok', onClick: () => { off = $('#subOff').value; onId = $('#subOn').value; if (!off && !onId) { alert('Choose at least one player.'); return false; } } }]).then(r => {
     if (r !== 'ok') return;
