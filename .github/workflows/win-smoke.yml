@@ -40,8 +40,8 @@ jobs:
         shell: pwsh
         run: |
           $inst = Get-ChildItem dist\*.exe | Select-Object -First 1
-          Write-Host "Installing $($inst.Name) for the current user (silent)"
-          Start-Process -FilePath $inst.FullName -ArgumentList '/S','/currentuser' -Wait
+          Write-Host "Installing $($inst.Name) (silent)"
+          Start-Process -FilePath $inst.FullName -ArgumentList '/S' -Wait
           $exe = $null
           for ($i = 0; $i -lt 90 -and -not $exe; $i++) {
             $exe = @("$env:LOCALAPPDATA\Programs", "$env:ProgramFiles", "${env:ProgramFiles(x86)}") | Where-Object { Test-Path $_ } |
