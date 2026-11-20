@@ -52,10 +52,12 @@ function openEventEditor(id) {
   Dlg.open('✎ Edit event #' + ev.id, html, [
     { label: '🗑 Delete', danger: true, value: 'del', onClick: () => { if (!confirm('Delete this event?')) return false; action = 'del'; } },
     { label: '⧉ Duplicate', value: 'dup', onClick: () => { action = 'dup'; window.__ee = read(); } },
+    ...(typeof v3ReplayDialog === 'function' ? [{ label: '🧊 3D replay', value: '3d', onClick: () => { action = '3d'; } }] : []),
     { label: 'Cancel' },
     { label: 'Save', primary: true, value: 'ok', onClick: () => { action = 'ok'; window.__ee = read(); } }
   ], { onOpen: b => b.querySelectorAll('[data-now]').forEach(btn => btn.onclick = () => { b.querySelector('#' + btn.dataset.now).value = Math.round(curT() * 100) / 100; }) }).then(() => {
     if (!action) return;
+    if (action === '3d') { selectEvent(ev.id); setTimeout(() => v3ReplayDialog(v3RangeFromTag(ev)), 60); return; }
     checkpoint();
     if (action === 'del') { events = events.filter(e => e.id !== ev.id); toast('Event deleted', 'info'); }
     else if (action === 'ok') { apply(ev, window.__ee); toast('Event updated', 'ok'); }

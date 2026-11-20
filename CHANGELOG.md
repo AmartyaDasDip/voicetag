@@ -1,5 +1,31 @@
 # TACTIQ ANALYST – changelog
 
+## 2.6.0 – roadmap phase 0.9: 3D tactical view
+
+A 3D pitch with the tracked players and the ball, built from the 2D tracking data. Tested in the real desktop app:
+32 new automated checks (synthetic match with exact positions, and real AI tracking on broadcast footage), plus the
+full regression suite.
+
+### New
+- **🧊 3D view** under the video: follows the video frame by frame; every figure stands exactly on its 2D pitch
+  position (checked to the centimetre); estimated positions are faded; nothing is shown where there is no
+  calibration or in close-ups, with a clear message. Sizes S / M / L / full video area.
+- **Cameras:** TV camera that follows the play, tactical (whole pitch), top-down, behind either goal, player view
+  (through the eyes of the selected track, looking at the ball) and free camera (drag to turn, right-drag to move,
+  wheel to zoom).
+- **Overlays:** names, trails, team shape (outfield outline), team lines (defence / midfield / attack), and tags at
+  their pitch location with an arc to the end point (passes, shots); recent tags also appear as captions.
+- **🎬 3D replay:** a tag, the last N seconds or any range, from any camera, at ¼× to 2×, with play/pause, slider,
+  loop and Esc back to the video. Also from the tag editor (**🧊 3D replay**).
+- **MP4 export** of a 3D replay (1280 × 720 or 1920 × 1080, 25 / 30 fps, H.264), rendered frame by frame so the
+  video is smooth even on a slow PC; captions with teams, match clock and tags; cancel at any time.
+  Test: 4 s → exactly 121 frames / 4.03 s; ½× slow motion of 2 s → 4 s.
+- **📷 3D picture** at 1920 × 1080.
+- Quality setting (Auto / Light / High): Auto chooses Light on PCs with 8 GB or 2 cores. The 3D library (three.js,
+  MIT licence) loads only when the 3D view is first opened. If the PC has no usable graphics driver for 3D, the app
+  falls back to software rendering.
+- The 2D window now always stays on top of the 3D window.
+
 ## 2.5.0 – roadmap phase 0.8: broadcast footage support
 
 TV / broadcast footage cuts between the main camera, close-ups, replays and crowd shots. 2.5.0 handles this.

@@ -10,6 +10,10 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }
 ]);
 
+// 3D view: if Windows has no usable graphics driver for WebGL, fall back to software rendering.
+// Safe here because the window only ever shows the app's own local pages (web links open in the browser).
+app.commandLine.appendSwitch('enable-unsafe-swiftshader');
+
 const RENDERER_DIR = path.join(__dirname, 'renderer');
 // keep settings, tags and season data from the VoiceTag versions
 app.setName('TACTIQ ANALYST');
@@ -259,6 +263,44 @@ ipcMain.handle('convert-video', async (e, p) => {
   } finally { currentConvert = null; }
 });
 ipcMain.handle('cancel-convert', async () => { if (currentConvert) exporter.cancel(currentConvert); return true; });
+
+/* ------------------------------------------------------------------ 3D VIDEO (frames from the 3D view → MP4) */
+let v3job = null;
+function v3Abort() { if (!v3job) return; const j = v3job; v3job = null; try { j.proc.kill('SIGKILL'); } catch (e) { /* ignore */ } try { fs.rmSync(j.part, { force: true }); } catch (e) { /* ignore */ } }
+ipcMain.handle('v3d-begin', async (e, { defaultName, fps, w, h }) => {
+  const ff = ffmpegPath();
+  if (!ff) return { ok: false, error: 'ffmpeg is missing from this build.' };
+  v3Abort();
+  const r = await dialog.showSaveDialog(win, { title: 'Save 3D video', defaultPath: defaultName || '3D replay.mp4', filters: [{ name: 'MP4 video', extensions: ['mp4'] }] });
+  if (r.canceled || !r.filePath) return { ok: false, cancelled: true };
+  const out = /\.mp4$/i.test(r.filePath) ? r.filePath : r.filePath + '.mp4', part = out + '.part.mp4';
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  const fpsN = Math.max(10, Math.min(60, Number(fps) || 30));
+  const proc = require('child_process').spawn(ff, ['-hide_banner', '-y', '-f', 'image2pipe', '-framerate', String(fpsN), '-c:v', 'mjpeg', '-i', '-',
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-r', String(fpsN), '-movflags', '+faststart', '-f', 'mp4', part], { windowsHide: true });
+  const job = { proc, out, part, err: '', exited: false };
+  job.done = new Promise(res => proc.on('close', code => { job.exited = true; res(code); }));
+  proc.on('error', err => { job.err += String(err.message || err); });
+  proc.stderr.on('data', d => { job.err = (job.err + d).slice(-3000); });
+  proc.stdin.on('error', () => { /* reported through the exit code */ });
+  v3job = job;
+  return { ok: true, file: out };
+});
+ipcMain.handle('v3d-frame', async (e, bytes) => {
+  const j = v3job; if (!j || j.exited) return false;
+  if (!j.proc.stdin.write(Buffer.from(bytes))) await new Promise(res => { j.proc.stdin.once('drain', res); j.done.then(res); });
+  return !j.exited;
+});
+ipcMain.handle('v3d-end', async (e, { cancel } = {}) => {
+  const j = v3job; if (!j) return { ok: false, error: 'no 3D video in progress' };
+  if (cancel) { v3Abort(); return { ok: false, cancelled: true }; }
+  v3job = null;
+  try { j.proc.stdin.end(); } catch (err) { /* ignore */ }
+  const code = await j.done;
+  if (code === 0 && fs.existsSync(j.part)) { fs.renameSync(j.part, j.out); allowedMedia.add(path.resolve(j.out)); return { ok: true, file: j.out }; }
+  try { fs.rmSync(j.part, { force: true }); } catch (err) { /* ignore */ }
+  return { ok: false, error: (j.err || 'ffmpeg exit code ' + code).split('\n').filter(Boolean).slice(-3).join(' | ') };
+});
 ipcMain.handle('cancel-export', async () => { if (currentExport) exporter.cancel(currentExport); return true; });
 
 /* ------------------------------------------------------------------ PROJECT FOLDERS */

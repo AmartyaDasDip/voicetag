@@ -66,6 +66,19 @@
           <select id="p2size" class="small"><option value="s">S</option><option value="m" selected>M</option><option value="l">L</option></select>
           <select id="p2show" class="small" title="Which tracks to show"><option value="all">all</option><option value="Home">home</option><option value="Away">away</option><option value="ball">ball</option><option value="sel">selected</option></select>
           <label class="small"><input type="checkbox" id="p2trails" checked> trails</label><select id="p2trail" class="small" title="Trail length"><option value="2">2 s</option><option value="6" selected>6 s</option><option value="10">10 s</option><option value="20">20 s</option></select><button class="small" id="p2close">✕</button></div><div id="p2svg"></div><div id="p2info" class="muted small" style="margin-top:3px"></div></div>
+        <div id="p3d" class="hidden m"><div class="p2head"><b>3D</b><select id="p3cam" class="small" title="Camera"></select><span class="spacer"></span>
+          <select id="p3quality" class="small" title="3D quality – Light is smoother on 8 GB PCs"><option value="auto">Auto</option><option value="light">Light</option><option value="high">High</option></select>
+          <button class="small" id="p3replayBtn" title="Replay a part of the match in 3D, or save it as an MP4 video">🎬 Replay</button>
+          <button class="small" id="p3shot" title="Save a 3D picture (1920 × 1080)">📷</button>
+          <select id="p3size" class="small" title="Size"><option value="s">S</option><option value="m" selected>M</option><option value="l">L</option><option value="full">Full</option></select>
+          <button class="small" id="p3close">✕</button></div>
+          <div class="p3opts small"><label><input type="checkbox" id="p3o_labels"> names</label><label><input type="checkbox" id="p3o_trails"> trails</label><label><input type="checkbox" id="p3o_shape"> team shape</label><label><input type="checkbox" id="p3o_lines"> lines</label><label><input type="checkbox" id="p3o_events"> tags</label><span class="muted">· drag = turn, right-drag = move, wheel = zoom</span></div>
+          <div id="p3wrap"><canvas id="p3canvas"></canvas><canvas id="p3hud"></canvas><div id="p3msg" class="hidden"></div>
+            <div id="p3export" class="hidden"><div id="p3expTxt">Saving 3D video …</div><button class="small" id="p3expCancel">Cancel</button></div></div>
+          <div id="p3replay" class="hidden"><button class="small" id="p3rPlay" title="Play / pause (Space)">⏸</button><input type="range" id="p3rSlider"><span id="p3rTime" class="small"></span>
+            <select id="p3rSpeed" class="small" title="Speed"><option value="0.25">¼×</option><option value="0.5">½×</option><option value="1">1×</option><option value="2">2×</option></select>
+            <label class="small"><input type="checkbox" id="p3rLoop"> loop</label><button class="small" id="p3rBack" title="Back to following the video (Esc)">↩ video</button></div>
+          <div id="p3info" class="muted small" style="margin-top:3px"></div></div>
         <div id="trackBar" class="hidden"></div>
         <div id="drop">
           <div class="big">🎬</div>
@@ -127,6 +140,7 @@
         <button id="btnShot" title="Screenshot (saved in the project's screenshots folder)">📷</button>
         <button id="btnFull" title="Full screen">⛶</button>
         <button id="btn2D" title="2D pitch view of tracked players">🗺 2D</button>
+        <button id="btn3D" title="3D view of the tracked players – follow the video, replay a moment from any camera, save as video">🧊 3D</button>
         <span class="sep"></span>
         <button class="small" id="btnClipIn" title="Clip IN at current time ( [ )">[ In</button>
         <button class="small" id="btnClipOut" title="Clip OUT at current time ( ] )">Out ]</button>
@@ -345,5 +359,6 @@
 <script src="editor.js"></script>
 <script src="shots.js"></script>
 <script src="positions.js"></script>
+<script src="view3d.js"></script>
 </body>
 </html>

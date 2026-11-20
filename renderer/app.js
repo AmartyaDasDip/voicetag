@@ -883,7 +883,7 @@ function renderHelp() {
     <li>Turn tracking on (<kbd>F8</kbd>), select a player (<kbd>Tab</kbd>), click their feet. The video jumps forward by the step (e.g. 5 frames). Repeat.</li>
     <li>Between keyframes positions are <i>interpolated</i> (dashed) only for short gaps – never across occluded / out-of-frame marks.</li>
     <li>Right-click or <kbd>Delete</kbd> removes a keyframe, drag a marker to move it, <kbd>Enter</kbd>/<kbd>Backspace</kbd> step without clicking.</li></ol>
-    <p>🗺 2D shows the tracked players on the pitch with trails. Maps → Tracking heatmap / Average positions. Export → Tracking CSV/JSON.</p>
+    <p>🗺 2D shows the tracked players on the pitch with trails; 🧊 3D shows them on a 3D pitch (see below). Maps → Tracking heatmap / Average positions. Export → Tracking CSV/JSON.</p>
     <h3>🤖 AI tracking (Track tab)</h3>
     <ol><li><b>🤖 Auto-detect players</b>: choose a range (from here for N seconds, the clip IN–OUT, or the whole video), the model (Fast for 8 GB PCs, Accurate for 16 GB) and how many frames to look at. It runs in the background – keep tagging.</li>
     <li>When it finishes, say which kit colour is which team. Referees, keepers and staff go to “Other”.</li>
@@ -902,6 +902,12 @@ function renderHelp() {
     <li>In practice: calibrate once every few seconds of a pan – on the Spain v England test, two calibrations 5 s apart gave about 1 m accuracy for the whole stretch, instead of only the moments you calibrated.</li>
     <li>When you calibrate a new moment, the landmarks are <b>placed for you</b> from the camera movement – drag the ones that are off and save.</li>
     <li>The Track tab shows the calibration at the current moment with its estimated error; carrying stops at camera cuts and when the error would exceed 4 m. Switch it off with “calibration follows the camera”.</li></ul>
+    <h3>🧊 3D view</h3>
+    <ol><li><b>🧊 3D</b> (under the video) shows the tracked players and the ball on a 3D pitch, following the video. It uses the same positions as the 2D view, so it needs tracking and a pitch calibration.</li>
+    <li>Cameras: <b>TV camera</b> (follows the play), <b>Tactical</b> (whole pitch), <b>Top-down</b>, <b>behind either goal</b>, <b>Player view</b> (through the eyes of the selected track) and <b>Free</b>: drag to turn, right-drag (or Shift-drag) to move, mouse wheel to zoom.</li>
+    <li>Show or hide names, trails, the <b>team shape</b> (outline of the outfield players), the team’s <b>lines</b> (defence, midfield, attack) and <b>tags</b> (tags with a pitch location appear where they happened; a pass with an end point gets its line).</li>
+    <li><b>🎬 Replay</b> plays a tag, the last N seconds or any from–to range in 3D, from any camera and at ¼× to 2× (Space = play/pause, Esc = back to the video), or saves it as an <b>MP4 video</b> (720p or 1080p) – in a project it goes to the clips folder. In the tag editor, <b>🧊 3D replay</b> does the same for that tag. 📷 saves a 1920 × 1080 picture.</li>
+    <li>Faded players are estimated (between tracked points). Players that are not tracked, outside the picture or in close-ups are not shown. Heights, body turn and ball height are not measured – it is a visualisation, not a measurement. On an 8 GB PC choose quality <b>Light</b> if it is not smooth.</li></ol>
     <h3>📺 Broadcast / TV footage (Track tab)</h3>
     <ol><li><b>📺 Scan camera shots</b> finds every camera cut and sorts the shots: <b>wide</b> and <b>medium</b> (usable for 2D tracking), <b>close-up</b> and <b>other</b> (crowd, bench, graphics). About 1–3 minutes per 10 minutes of video.</li>
     <li>Mark <b>replays</b> in the shot list (a slow-motion replay from the main camera looks like a normal wide shot, so the app can’t always tell). If a cut was found by mistake, press <b>⤒ join</b>.</li>
