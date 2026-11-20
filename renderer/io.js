@@ -171,6 +171,12 @@ $('#btnXlsx').onclick = async () => {
 };
 
 /* ---------------------------------------------------------------- PROJECTS */
+// project file text; the (big) tracking data is put in from the per-track cache instead of being converted again
+function projectText(proj) {
+  if (!proj.tracking || typeof TR === 'undefined' || proj.tracking.tracks !== TR.tracks) return JSON.stringify(proj);
+  const txt = JSON.stringify(Object.assign({}, proj, { tracking: Object.assign({}, proj.tracking, { tracks: '__TQ_TRACKS__', camera: '__TQ_CAMERA__' }) }));
+  return txt.replace('"__TQ_TRACKS__"', () => TrackJson.all()).replace('"__TQ_CAMERA__"', () => CamJson.get());
+}
 function projectObject() {
   return { app: 'VoiceTag', product: 'TACTIQ ANALYST', version: 4, appVersion: APP_VERSION, savedAt: new Date().toISOString(),
     project: { info: typeof project !== 'undefined' ? project.info : {} },

@@ -56,6 +56,21 @@ jobs:
       - name: Build installer
         run: npx electron-builder --win nsis --x64 --publish never
 
+      - name: Install the app (silent, like a user would)
+        shell: pwsh
+        run: |
+          $inst = Get-ChildItem dist\*.exe | Select-Object -First 1
+          Start-Process -FilePath $inst.FullName -ArgumentList '/S' -Wait
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter 'TACTIQ ANALYST.exe' | Select-Object -First 1
+          if (-not $exe) { throw 'The installed app was not found' }
+          Write-Host "Installed: $($exe.FullName)"
+          "TACTIQ_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Smoke test of the installed app (the installer is only published when it passes)
+        shell: pwsh
+        timeout-minutes: 40
+        run: node tests/smoke/smoke.js "$env:TACTIQ_EXE"
+
       - name: Keep installer as a build artifact
         uses: actions/upload-artifact@v4
         with:

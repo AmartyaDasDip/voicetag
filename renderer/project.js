@@ -44,13 +44,29 @@ function rememberRecent() {
 
 /* ---------------------------------------------------------------- SAVE / OPEN */
 async function writeProjectFile(silent) {
-  const proj = projectObject(), text = JSON.stringify(proj);
+  const proj = projectObject(), text = projectText(proj);
   const backup = Date.now() - lastBackupAt > 10 * 60 * 1000;
   await api.writeProject({ file: project.file, text, backup });
   if (backup) lastBackupAt = Date.now();
   dirty = false; updateProjectTitle(); rememberRecent();
   if (typeof addToLibrary === 'function') addToLibrary(project.file, proj, text);
   if (!silent) toast('💾 Project saved', 'ok', 1500);
+}
+// work saved automatically after the last save of the project file (crash, power cut, closed without saving)
+async function applyNewerRecovery(p, file, auto) {
+  if (!api.recoveryRead) return false;
+  const rec = await api.recoveryRead('vt_proj_' + file).catch(() => null); if (!rec) return false;
+  let L; try { L = JSON.parse(rec.light); } catch (e) { return false; }
+  const recAt = Date.parse(L.savedAt || 0), fileAt = Date.parse(p.savedAt || 0);
+  if (!(recAt > fileAt + 1500)) return false;
+  const when = new Date(recAt).toLocaleString();
+  if (!auto && !confirm(`This project has newer work that was not saved to the project file (saved automatically ${when}: ${(L.events || []).length} tags${L.trackCount ? ', ' + L.trackCount + ' tracks' : ''}).\n\nOK = use the newer work\nCancel = open the project file as it is`)) return false;
+  p.events = L.events || p.events; p.nextId = L.nextId || p.nextId; if (L.match) p.match = L.match; if (L.clips) p.clips = L.clips;
+  p.tracking = p.tracking || {};
+  ['cals', 'shots', 'cuts'].forEach(k => { if (L[k]) p.tracking[k] = L[k]; }); if (L.trlog) p.tracking.log = L.trlog;
+  if (rec.tracks) { try { const o = JSON.parse(rec.tracks); p.tracking.tracks = o.tracks; p.tracking.camera = o.camera; } catch (e) { /* tracks copy damaged: keep the file's */ } }
+  AppLog.send('info', 'restored newer automatic copy of ' + file + ' from ' + L.savedAt);
+  return new Date(recAt).toLocaleTimeString();
 }
 async function saveProject(saveAs) {
   if (!api.writeProject) {   // browser test mode: download a file
@@ -64,25 +80,28 @@ async function saveProject(saveAs) {
   }
   try { await writeProjectFile(false); } catch (err) { alert('Could not save the project:\n' + err.message); }
 }
-async function openProjectFile(file) {
+async function openProjectFile(file, opts = {}) {
   if (dirty && project.file && !confirm('Your current project has unsaved changes. Save them first?\n\nOK = save, Cancel = discard')) { /* discard */ }
   else if (dirty && project.file) await writeProjectFile(true);
   const r = await api.readProject(file);
   if (r.error) { alert('Could not open the project:\n' + r.error); return false; }
   try {
-    const p = JSON.parse(r.text);
+    const p = JSON.parse(r.text); r.text = null;
+    const usedRec = await applyNewerRecovery(p, file, opts.useRecovery);
     await openProjectData(p, file, false);
     project = Object.assign(EMPTY_PROJECT(), { file, dir: file.replace(/[\\/][^\\/]+$/, '') });
     if (p.project && p.project.info) project.info = Object.assign(EMPTY_PROJECT().info, p.project.info);
     else project.info.name = file.split(/[\\/]/).slice(-2, -1)[0] || 'Match';
-    syncProjectToApp(); dirty = false; History.clear(); rememberRecent(); renderAll(); hideDashboard();
+    syncProjectToApp(); dirty = !!usedRec; History.clear(); rememberRecent(); renderAll(); hideDashboard();
+    if (usedRec) { updateProjectTitle(); toast('Restored the work saved automatically at ' + usedRec + ' – press Ctrl+S to keep it in the project file', 'ok', 6000); }
     return true;
   } catch (err) { alert('Could not open the project:\n' + err.message); return false; }
 }
 async function openProjectDialog() {
-  const f = await api.openTextFile({ filters: [{ name: 'TACTIQ / VoiceTag project', extensions: ['tactiq', 'vtproj', 'json'] }] });
+  const f = await api.openTextFile({ filters: [{ name: 'TACTIQ / VoiceTag project', extensions: ['tactiq', 'vtproj', 'json'] }], skipText: '\\.tactiq$' });
   if (!f) return;
   if (/\.tactiq$/i.test(f.path) && api.readProject) { await openProjectFile(f.path); return; }
+  if (f.text == null) return;
   try {
     const p = JSON.parse(f.text);
     await openProjectData(p, f.path, true);
@@ -212,14 +231,54 @@ $('#btnHome').onclick = showDashboard;
 $('#dNew').onclick = () => openProjectForm('new');
 $('#dOpen').onclick = openProjectDialog;
 $('#dQuick').onclick = hideDashboard;
-$('#dCont').onclick = async () => {
-  const s = window.__lastSession; window.__lastSession = null; hideDashboard(); if (!s) return;
+async function restoreQuickSession(s) {
+  hideDashboard(); if (!s) return;
   if (s.video && s.video.path && api.registerMedia) { const r = await api.registerMedia(s.video.path).catch(() => null); if (r) await loadVideo(r, true); else toast('The video of that session was not found: ' + s.video.name, 'bad', 4000); }
   events = s.events || []; nextId = s.nextId || (Math.max(0, ...events.map(e => e.id)) + 1); if (s.match) match = Object.assign(EMPTY_MATCH(), s.match);
   if (typeof TR !== 'undefined') { TR.tracks = s.tracks || []; TR.cals = s.cals || []; TR.log = s.trlog || []; TR.camera = s.camera || []; TR.shots = s.shots || []; TR.cuts = s.cuts || []; }
   if (typeof clips !== 'undefined') clips = s.clips || [];
-  History.clear(); renderAll(); toast('Session restored', 'ok');
+  if (s.key) sessionKey = s.key;
+  History.clear(); renderAll(); autosave(); toast('Session restored', 'ok');
+}
+$('#dCont').onclick = async () => {
+  const ls = window.__lastSession; window.__lastSession = null;
+  await restoreQuickSession(await sessionExtra(ls, (ls && ls.key) || sessionKey));
 };
+/* ---------------------------------------------------------------- AFTER A CRASH: offer the automatically saved work */
+async function offerCrashRecovery() {
+  const list = (api.recoveryList ? await api.recoveryList().catch(() => []) : []).filter(r => Date.now() - Date.parse(r.savedAt) < 14 * 864e5 && (r.events || r.points));
+  if (api.crashHandled) await api.crashHandled();
+  const r = list[0];
+  if (!r) { toast('TACTIQ ANALYST did not close properly last time – there was no unsaved work.', 'info', 4500); return false; }
+  const what = r.projectFile ? `project “${esc(r.projectName || r.projectFile.split(/[\\/]/).pop())}”` : `quick session${r.video ? ' with ' + esc(r.video) : ''}`;
+  const ans = await Dlg.open('⚠ TACTIQ ANALYST did not close properly', `<p>The app was closed unexpectedly last time – a crash, a power cut, or it was ended in Task Manager.</p>
+    <p>Your work was saved automatically at <b>${esc(new Date(r.savedAt).toLocaleString())}</b>: ${what} – ${r.events} tags${r.points ? ' and tracking data' : ''}.</p>
+    <p class="small muted">Details are in the log file (Help → Troubleshooting).</p>`, [{ label: 'Not now' }, { label: '↻ Restore my work', primary: true, value: 'yes' }]);
+  if (ans !== 'yes') return false;
+  if (r.projectFile) {
+    if (api.pathExists && !(await api.pathExists(r.projectFile))) { alert('The project file was not found:\n' + r.projectFile); return false; }
+    return openProjectFile(r.projectFile, { useRecovery: true });
+  }
+  const rec = await api.recoveryRead(r.key); if (!rec) return false;
+  const s = JSON.parse(rec.light); if (rec.tracks) { try { const o = JSON.parse(rec.tracks); s.tracks = o.tracks; s.camera = o.camera; } catch (e) { /* damaged */ } }
+  await restoreQuickSession(s);
+  return true;
+}
+/* ---------------------------------------------------------------- NEW VERSION? (once a day, can be turned off in Settings) */
+async function checkForUpdate(manual) {
+  if (!api.checkUpdate) { if (manual) api.openExternal('https://github.com/AmartyaDasDip/voicetag/releases'); return null; }
+  if (!manual) { if (config.general.updateCheck === false) return null; if (Date.now() - Number(localStorage.getItem('tq_updchk') || 0) < 20 * 3600e3) return null; }
+  try { localStorage.setItem('tq_updchk', String(Date.now())); } catch (e) { /* ignore */ }
+  const r = await api.checkUpdate().catch(e => ({ ok: false, error: e.message }));
+  if (!r || !r.ok) { if (manual) toast('Could not check for a new version' + (r && r.error ? ' (' + r.error + ')' : '') + ' – is the PC online?', 'bad', 4500); return r; }
+  if (r.newer && (manual || localStorage.getItem('tq_updskip') !== r.latest)) {
+    $('#updTxt').textContent = `🔔 TACTIQ ANALYST ${r.latest} is available (you have ${r.current}).`;
+    $('#updBar').classList.remove('hidden');
+    $('#updGet').onclick = () => api.openExternal(r.page);
+    $('#updX').onclick = () => { try { localStorage.setItem('tq_updskip', r.latest); } catch (e) { /* ignore */ } $('#updBar').classList.add('hidden'); };
+  } else if (manual) toast(`You have the newest version (${r.current})`, 'ok', 3000);
+  return r;
+}
 $('#dSettings').onclick = () => { hideDashboard(); openSettings(); };
 $('#dSearch').oninput = renderDashboard;
 $('#dRecent').addEventListener('click', async e => {
@@ -234,7 +293,10 @@ $('#dRecent').addEventListener('click', async e => {
 window.addEventListener('DOMContentLoaded', async () => {
   if (api.systemInfo) { try { sysInfo = await api.systemInfo(); } catch (e) { /* ignore */ } }
   updateProjectTitle();
+  setTimeout(() => checkForUpdate(false), 6000);
+  const si = api.startupInfo ? await api.startupInfo().catch(() => null) : null;
   const f = api.pendingFile ? await api.pendingFile() : null;
+  if (si && (si.crashed || si.rendererCrashes)) { showDashboard(); if (await offerCrashRecovery()) return; }
   if (f) { openProjectFile(f); return; }
   showDashboard();
 });

@@ -82,7 +82,8 @@ function importShots(res, o) {
 }
 
 /* ---------------------------------------------------------------- the panel */
-function shotCalStatus(sh) {
+function shotCalStatus(sh) { return Memo.get('shcal|' + sh.id + '|' + sh.t0 + '|' + sh.t1 + '|' + sh.type, () => shotCalStatusCalc(sh)); }
+function shotCalStatusCalc(sh) {
   if (!trackableShot(sh)) return { cls: '', txt: 'not used for 2D' };
   let n = 0, ok = 0, err = 0, carried = 0;
   for (let t = sh.t0 + 0.05; t < sh.t1; t += 0.5) { n++; const c = calAt(t); if (c) { ok++; if (c.carried) { carried++; err += c.err; } } }

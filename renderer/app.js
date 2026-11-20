@@ -4,6 +4,20 @@
    ===================================================================== */
 const HOOKS = { render: [], afterTag: [], tick: [], key: [] };
 
+/* ---------------------------------------------------------------- ERROR LOG
+   Errors in the window go to the log file (Help → Troubleshooting); at most 60 lines a minute. */
+const AppLog = {
+  n: 0, t0: Date.now(),
+  send(level, msg) {
+    if (Date.now() - this.t0 > 60000) { this.t0 = Date.now(); this.n = 0; }
+    if (++this.n > 60) return;
+    try { if (window.api && window.api.log) window.api.log(level, String(msg).slice(0, 3000)); } catch (e) { /* ignore */ }
+  }
+};
+window.addEventListener('error', e => AppLog.send('error', `${e.message} @ ${String(e.filename || '').split('/').pop()}:${e.lineno}:${e.colno}${e.error && e.error.stack ? ' | ' + e.error.stack.split('\n').slice(1, 5).join(' | ') : ''}`));
+window.addEventListener('unhandledrejection', e => AppLog.send('error', 'unhandled promise: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)));
+{ const ce = console.error.bind(console); console.error = (...a) => { ce(...a); AppLog.send('error', a.map(x => x && x.stack ? x.stack : typeof x === 'object' ? (() => { try { return JSON.stringify(x); } catch (e) { return String(x); } })() : String(x)).join(' ')); }; }
+
 /* ---------------------------------------------------------------- STATE */
 let events = [];
 let nextId = 1;
@@ -20,28 +34,70 @@ let curTeam = 'Home';           // team for new tags without a player (Home / Aw
 let videoMeta = null;           // resolution, fps, codecs of the open video
 const frameDur = () => 1 / ((videoMeta && videoMeta.fps) || 25);
 
-/* ---------------------------------------------------------------- UNDO / REDO (whole-session snapshots) */
+/* ---------------------------------------------------------------- DATA REVISION + MEMO
+   Every change to tags, tracks or calibrations bumps Memo.rev; heavy results (possession, team shape, timelines …)
+   are kept until the next change, so a full 90-minute match stays quick to work with. */
+const Memo = {
+  rev: 1, m: new Map(),
+  get(key, fn) { const e = this.m.get(key); if (e && e.rev === this.rev) return e.v; const v = fn(); this.m.set(key, { rev: this.rev, v }); if (this.m.size > 300) this.m.clear(); return v; }
+};
+function dataChanged() { Memo.rev++; }
+
+/* ---------------------------------------------------------------- TRACK JSON CACHE
+   One JSON text per track, reused while the track is unchanged. Undo snapshots, crash copies and project saves
+   of a match with AI tracking (1–2 million points) would otherwise copy ~100 MB every time. */
+const TrackJson = {
+  cache: new WeakMap(),
+  fp(tk) {                                                    // cheap fingerprint of everything in a track
+    const p = tk.points; let s = 0, u = 0;
+    for (let i = 0; i < p.length; i++) {
+      const q = p[i];
+      s += q.t + (q.x || 0) * 7.13 + (q.y || 0) * 13.7 + (q.conf || 0) * 0.0191;
+      u += (q.vis === 'v' ? 1 : q.vis === 'o' ? 3 : q.vis === 'out' ? 5 : 7) * (i % 13 + 1) + (q.src === 'ai' ? 0.5 : 0.25) + (q.orig ? 11 : 0);
+    }
+    const meta = {}; for (const k in tk) if (k !== 'points') meta[k] = tk[k];
+    return JSON.stringify(meta) + '|' + p.length + '|' + s + '|' + u;
+  },
+  json(tk) {
+    const fp = this.fp(tk), c = this.cache.get(tk);
+    if (c && c.fp === fp) return c.json;
+    const json = JSON.stringify(tk); this.cache.set(tk, { fp, json }); return json;
+  },
+  sig() { return typeof TR === 'undefined' ? '' : TR.tracks.map(tk => { this.json(tk); return this.cache.get(tk).fp; }).join('\n'); },
+  all() { return typeof TR === 'undefined' ? '[]' : '[' + TR.tracks.map(tk => this.json(tk)).join(',') + ']'; },
+  parse(json) { const tk = JSON.parse(json); this.cache.set(tk, { fp: this.fp(tk), json }); return tk; }
+};
+const CamJson = { arr: null, n: -1, json: '[]', get() { const c = typeof TR !== 'undefined' ? TR.camera || [] : []; const n = c.reduce((a, s) => a + s.pts.length, 0) + c.length * 1e6; if (c !== this.arr || n !== this.n) { this.arr = c; this.n = n; this.json = JSON.stringify(c); } return this.json; } };
+
+/* ---------------------------------------------------------------- UNDO / REDO (session snapshots; unchanged tracks are shared) */
 const History = {
   past: [], future: [], max: 60,
   snap() {
-    return JSON.stringify({ events, nextId, match, open, curTeam,
-      tracks: typeof TR !== 'undefined' ? TR.tracks : [], cals: typeof TR !== 'undefined' ? TR.cals : [], trlog: typeof TR !== 'undefined' ? TR.log || [] : [], camera: typeof TR !== 'undefined' ? TR.camera || [] : [], shots: typeof TR !== 'undefined' ? TR.shots || [] : [], cuts: typeof TR !== 'undefined' ? TR.cuts || [] : [], clips: typeof clips !== 'undefined' ? clips : [] });
+    const T = typeof TR !== 'undefined';
+    return { light: JSON.stringify({ events, nextId, match, open, curTeam, cals: T ? TR.cals : [], trlog: T ? TR.log || [] : [], shots: T ? TR.shots || [] : [], cuts: T ? TR.cuts || [] : [], clips: typeof clips !== 'undefined' ? clips : [] }),
+      tracks: T ? TR.tracks.map(tk => TrackJson.json(tk)) : [], camera: CamJson.get() };
   },
   checkpoint() { this.past.push(this.snap()); if (this.past.length > this.max) this.past.shift(); this.future = []; markDirty(); },
-  restore(str) {
-    const o = JSON.parse(str);
+  restore(sn) {
+    const o = JSON.parse(sn.light);
     events = o.events; nextId = o.nextId; match = o.match; open = o.open || {}; curTeam = o.curTeam || curTeam;
-    if (typeof TR !== 'undefined') { TR.tracks = o.tracks || []; TR.cals = o.cals || []; TR.log = o.trlog || []; TR.camera = o.camera || TR.camera || []; TR.shots = o.shots || TR.shots || []; TR.cuts = o.cuts || TR.cuts || []; }
+    if (typeof TR !== 'undefined') {
+      // tracks whose text is unchanged keep their current object (no re-parsing of a million points)
+      const cur = new Map(); TR.tracks.forEach(tk => cur.set(TrackJson.json(tk), tk));
+      TR.tracks = sn.tracks.map(j => cur.get(j) || TrackJson.parse(j));
+      TR.cals = o.cals || []; TR.log = o.trlog || []; TR.shots = o.shots || TR.shots || []; TR.cuts = o.cuts || TR.cuts || [];
+      if (sn.camera !== CamJson.get()) TR.camera = JSON.parse(sn.camera);
+    }
     if (typeof clips !== 'undefined') clips = o.clips || [];
-    locAsk = null; renderAll(); autosave(); markDirty();
+    locAsk = null; markDirty(); renderAll(); autosave();
   },
   undo() { if (!this.past.length) { toast('Nothing to undo', 'info'); return; } this.future.push(this.snap()); this.restore(this.past.pop()); toast('↶ Undo', 'info', 900); },
   redo() { if (!this.future.length) { toast('Nothing to redo', 'info'); return; } this.past.push(this.snap()); this.restore(this.future.pop()); toast('↷ Redo', 'info', 900); },
-  clear() { this.past = []; this.future = []; }
+  clear() { this.past = []; this.future = []; dataChanged(); }
 };
 const checkpoint = () => History.checkpoint();
 let dirty = false;
-function markDirty() { dirty = true; }
+function markDirty() { dirty = true; dataChanged(); }
 let locAsk = null;            // {id, stage:'start'|'end'} while waiting for a pitch click
 function EMPTY_MATCH() { return { info: { date: '', opponent: '', competition: '', venue: 'Home', notes: '' }, kickoffs: {}, ends: {}, squad: {}, subs: [] }; }
 let match = EMPTY_MATCH();
@@ -133,7 +189,7 @@ api.onConvertProgress(p => {
 });
 $('#convCancel').onclick = () => api.cancelConvert();
 
-function setVideo(info, playPath, keepTags) {
+async function setVideo(info, playPath, keepTags) {
   if (!info) return;
   autosaveNow();
   video.src = info.url || api.mediaUrl(playPath || info.path);
@@ -153,7 +209,8 @@ function setVideo(info, playPath, keepTags) {
         confirm('Found ' + saved.events.length + ' saved tags for "' + info.name + '".\n\nOK = restore them\nCancel = start a fresh session')) {
       events = saved.events; nextId = saved.nextId || (Math.max(0, ...events.map(e => e.id)) + 1);
       if (saved.match) match = Object.assign(EMPTY_MATCH(), saved.match);
-      if (saved.tracks && typeof TR !== 'undefined') { TR.tracks = saved.tracks; TR.cals = saved.cals || []; TR.log = saved.trlog || []; TR.camera = saved.camera || []; TR.shots = saved.shots || []; TR.cuts = saved.cuts || []; }
+      await sessionExtra(saved, sessionKey);
+      if (typeof TR !== 'undefined' && (saved.tracks || saved.cals)) { TR.tracks = saved.tracks || []; TR.cals = saved.cals || []; TR.log = saved.trlog || []; TR.camera = saved.camera || []; TR.shots = saved.shots || []; TR.cuts = saved.cuts || []; }
       if (saved.clips && typeof clips !== 'undefined') clips = saved.clips;
     }
   } catch (e) { /* ignore */ }
@@ -233,6 +290,7 @@ $('#btnEndPeriod').onclick = () => {
 /* ---------------------------------------------------------------- TOAST / BEEP */
 let toastTimer = null;
 function toast(msg, kind = 'ok', ms = 2200) {
+  if (kind === 'bad') AppLog.send('warn', 'message shown: ' + msg);
   const el = $('#toast');
   el.textContent = msg; el.className = 'show ' + kind;
   clearTimeout(toastTimer);
@@ -703,16 +761,26 @@ function renderFilters() {
   const sumTeam = $('#sumTeam'); if (sumTeam) { sumTeam.options[0].textContent = config.general.homeName; sumTeam.options[1].textContent = config.general.awayName; }
   const mapTeam = $('#mapTeam'); if (mapTeam) { mapTeam.options[0].textContent = config.general.homeName; mapTeam.options[1].textContent = config.general.awayName; }
 }
+// the tag list only builds the rows in view (a full match has thousands of tags, each row has three drop-downs)
+const EVT = { list: [], from: -1, to: -1, rowH: 34, raf: 0, pOpts: '', cOpts: '' };
 function renderEvents() {
   const fc = $('#fCode').value, fp = $('#fPlayer').value;
-  const list = sortedEvents().filter(e => (!fc || e.codeId === fc) && (!fp || e.playerId === fp));
+  EVT.list = sortedEvents().filter(e => (!fc || e.codeId === fc) && (!fp || e.playerId === fp));
   $('#evCount').textContent = events.length ? '(' + events.length + ')' : '';
   $('#evEmpty').classList.toggle('hidden', events.length > 0);
   $('#evEmpty').innerHTML = 'No tags yet. Click a code button, press its key, type a command, or turn on Voice and say e.g. <code>right back pass</code>.';
-  const pOpts = playerOptions(true);
-  const cOpts = config.codes.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
-  const tb = $('#evTable tbody');
-  tb.innerHTML = list.map(e => {
+  if ($('#tab-events').classList.contains('hidden')) { EVT.from = EVT.to = -1; return; }   // built when the tab is shown
+  EVT.pOpts = playerOptions(true);
+  EVT.cOpts = config.codes.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  let scrollTo = -1;
+  if (lastNewId) { scrollTo = EVT.list.findIndex(e => e.id === lastNewId); }
+  if (scrollTo >= 0 && EVT.list.length > EVT_ALL) { const pane = $('#tab-events'), tb = $('#evTable tbody'); const off = tb.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop; pane.scrollTop = Math.max(0, off + scrollTo * EVT.rowH - pane.clientHeight / 2); }
+  renderEventRows(true);
+  if (lastNewId) { const tr = $('#evTable tbody').querySelector(`tr[data-id="${lastNewId}"]`); if (tr && EVT.list.length <= EVT_ALL) tr.scrollIntoView({ block: 'nearest' }); lastNewId = null; }
+}
+const EVT_ALL = 150;   // up to this many tags every row is built
+function evRowHtml(e) {
+  const pOpts = EVT.pOpts, cOpts = EVT.cOpts;
     const code = VOC.codesById[e.codeId];
     const outs = code ? code.outcomes : [];
     let oOpts = '<option value="">—</option>' + config.outcomes.filter(o => outs.includes(o.id) || o.id === e.outcomeId).map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join('');
@@ -731,15 +799,30 @@ function renderEvents() {
       <td><select data-f="outcome" class="${cls}">${oOpts}</select></td>
       <td class="evicons"><span class="${e.x != null ? '' : 'off'}" data-loc="${e.id}" title="${e.x != null ? 'Location set – click to clear' : 'No location'}">📍</span><span class="${e.note ? '' : 'off'}" data-note="${e.id}" title="${esc(e.note || 'Add a note')}">📝</span><span class="${nd ? '' : 'off'}" data-dr="${e.id}" title="${nd ? nd + ' drawing(s) – click to remove' : 'No drawings'}">✏${nd ? nd : ''}</span></td>
       <td style="white-space:nowrap"><button class="small" data-edit="${e.id}" title="Edit all fields">✎</button><button class="small danger" data-del="${e.id}" title="Delete">✕</button></td></tr>`;
-  }).join('');
-  list.forEach(e => {
-    const tr = tb.querySelector(`tr[data-id="${e.id}"]`);
+}
+function renderEventRows(force) {
+  const pane = $('#tab-events'), tb = $('#evTable tbody'), n = EVT.list.length;
+  let from = 0, to = n;
+  if (n > EVT_ALL) {
+    const off = tb.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
+    const v0 = pane.scrollTop - off, vh = pane.clientHeight || 800;
+    from = Math.max(0, Math.floor(v0 / EVT.rowH) - 20); to = Math.min(n, Math.ceil((v0 + vh) / EVT.rowH) + 20); if (to <= from) to = Math.min(n, from + 60);
+  }
+  if (!force && from === EVT.from && to === EVT.to) return;
+  EVT.from = from; EVT.to = to;
+  const pad = h => h > 0 ? `<tr class="vspace"><td colspan="7" style="height:${h}px;padding:0;border:0"></td></tr>` : '';
+  tb.innerHTML = pad(from * EVT.rowH) + EVT.list.slice(from, to).map(evRowHtml).join('') + pad((n - to) * EVT.rowH);
+  const rows = tb.querySelectorAll('tr[data-id]');
+  rows.forEach((tr, k) => {
+    const e = EVT.list[from + k]; if (!e) return;
     tr.querySelector('[data-f=code]').value = e.codeId;
     tr.querySelector('[data-f=player]').value = e.playerId || '';
     tr.querySelector('[data-f=outcome]').value = e.outcomeId || '';
   });
-  if (lastNewId) { const tr = tb.querySelector(`tr[data-id="${lastNewId}"]`); if (tr) tr.scrollIntoView({ block: 'nearest' }); lastNewId = null; }
+  if (n > EVT_ALL && rows.length) { const h = rows[0].offsetHeight; if (h > 12 && Math.abs(h - EVT.rowH) > 1) { EVT.rowH = h; renderEventRows(true); } }
 }
+$('#tab-events').addEventListener('scroll', () => { if (EVT.list.length > EVT_ALL && !EVT.raf) EVT.raf = requestAnimationFrame(() => { EVT.raf = 0; renderEventRows(false); }); });
+HOOKS.render.push(tab => { if (tab === 'events') renderEvents(); });
 $('#evTable').addEventListener('click', async e => {
   const s = e.target.closest('[data-seek]');
   if (s) { if (hasVideo()) video.currentTime = Math.max(0, Number(s.dataset.seek)); }
@@ -873,6 +956,10 @@ function renderHelp() {
   const pills = arr => arr.map(x => `<span class="pill">${esc(x)}</span>`).join('');
   $('#tab-help').innerHTML = `
     <p class="muted">TACTIQ ANALYST ${APP_VERSION} · <a href="#" id="lnkUpdates">check for a newer version</a></p>
+    <h3>🛠 Troubleshooting</h3>
+    <p class="small">If something goes wrong, the app writes it to a log file. A crash or power cut loses at most a few seconds of work: the next start offers to restore it.</p>
+    <div class="toolbar"><button class="small" id="hlpLogs">📂 Open the log folder</button><button class="small" id="hlpDiag">📋 Copy diagnostic report</button><button class="small" id="hlpUpd">🔔 Check for a new version</button></div>
+    <div id="hlpOut" class="small muted"></div>
     <h3>Keyboard</h3>
     <p class="small"><kbd>Space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> 5 s (<kbd>Shift</kbd> 1 s) · <kbd>,</kbd><kbd>.</kbd> one frame · <kbd>F9</kbd> voice on/off · <kbd>F8</kbd> tracking mode ·
     <kbd>[</kbd> clip in · <kbd>]</kbd> clip out · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo · <kbd>Ctrl</kbd>+<kbd>Y</kbd> redo · <kbd>Ctrl</kbd>+<kbd>S</kbd> save · <kbd>/</kbd> type a command · letters = code buttons</p>
@@ -947,7 +1034,16 @@ function renderHelp() {
       <li>Use a headset mic. Turn on push-to-talk (Settings → General) if people talk around you.</li>
       <li>Check the <b>Voice log</b>. If a word is often misheard, add the misheard word to that item’s “Say” box.</li>
     </ul>`;
-  const l = $('#lnkUpdates'); if (l) l.onclick = e => { e.preventDefault(); api.openExternal('https://github.com/AmartyaDasDip/voicetag/releases'); };
+  const l = $('#lnkUpdates'); if (l) l.onclick = e => { e.preventDefault(); checkForUpdate(true); };
+  const hb = (id, fn) => { const x = $('#' + id); if (x) x.onclick = fn; };
+  hb('hlpLogs', () => api.openLogFolder ? api.openLogFolder() : toast('Only in the desktop app', 'bad'));
+  hb('hlpDiag', async () => {
+    if (!api.diagnostics) { toast('Only in the desktop app', 'bad'); return; }
+    const txt = await api.diagnostics();
+    try { await navigator.clipboard.writeText(txt); toast('📋 Diagnostic report copied – paste it into a message', 'ok', 3500); } catch (e) { toast('Could not copy – shown below', 'bad'); }
+    $('#hlpOut').innerHTML = `<pre style="white-space:pre-wrap;max-height:260px;overflow:auto">${esc(txt)}</pre>`;
+  });
+  hb('hlpUpd', () => checkForUpdate(true));
 }
 
 /* ---------------------------------------------------------------- RENDER ALL */
@@ -967,21 +1063,47 @@ document.addEventListener('click', () => $$('.menu').forEach(x => x.classList.re
 
 /* ---------------------------------------------------------------- AUTOSAVE */
 let autosaveTimer = null;
-function autosave() { clearTimeout(autosaveTimer); autosaveTimer = setTimeout(autosaveNow, 400); }
-function autosaveNow() {
+function autosave() { dataChanged(); clearTimeout(autosaveTimer); autosaveTimer = setTimeout(autosaveNow, 400); }
+// crash copy: tags etc. on every change; tracking data (can be ~100 MB) only when it changed, at most every 8 s
+const REC = { sig: {}, at: {}, size: {}, timer: null };
+function autosaveNow(flush) {
   try {
-    const hasTrack = typeof TR !== 'undefined' && TR.tracks.length;
-    // a project keeps its own crash-safety copy; quick sessions are kept per video (or 'default' without video)
+    const T = typeof TR !== 'undefined', hasTrack = T && TR.tracks.length;
     const projFile = typeof project !== 'undefined' && project.file ? project.file : null;
     const key = projFile ? 'vt_proj_' + projFile : sessionKey;
-    if (events.length || Object.keys(match.kickoffs).length || hasTrack || (typeof clips !== 'undefined' && clips.length))
-      localStorage.setItem(key, JSON.stringify({ events, nextId, match, video: videoInfo, savedAt: new Date().toISOString(), projectFile: projFile,
-        tracks: hasTrack ? TR.tracks : [], cals: typeof TR !== 'undefined' ? TR.cals : [], trlog: typeof TR !== 'undefined' ? TR.log || [] : [], camera: typeof TR !== 'undefined' ? TR.camera || [] : [], shots: typeof TR !== 'undefined' ? TR.shots || [] : [], cuts: typeof TR !== 'undefined' ? TR.cuts || [] : [], clips: typeof clips !== 'undefined' ? clips : [] }));
-    else localStorage.removeItem(key);
-  } catch (e) { /* ignore */ }
+    const any = events.length || Object.keys(match.kickoffs).length || hasTrack || (typeof clips !== 'undefined' && clips.length);
+    if (!any) { localStorage.removeItem(key); if (api.recoveryClear && !projFile) api.recoveryClear(key); return; }
+    const points = T ? TR.tracks.reduce((a, tk) => a + tk.points.length, 0) : 0;
+    const light = JSON.stringify({ key, events, nextId, match, video: videoInfo, savedAt: new Date().toISOString(), projectFile: projFile,
+      projectName: projFile && project.info ? project.info.name : '', cals: T ? TR.cals : [], trlog: T ? TR.log || [] : [], shots: T ? TR.shots || [] : [], cuts: T ? TR.cuts || [] : [],
+      clips: typeof clips !== 'undefined' ? clips : [], trackCount: T ? TR.tracks.length : 0, points });
+    // quick sessions are also kept in the browser storage (dashboard: "Continue last session"); big tracking data only in the file
+    if (!projFile) {
+      const small = points < 30000;
+      try { localStorage.setItem(key, light.slice(0, -1) + (small ? ',"tracks":' + TrackJson.all() + ',"camera":' + CamJson.get() + '}' : ',"tracksInFile":true}')); }
+      catch (e) { try { localStorage.setItem(key, light.slice(0, -1) + ',"tracksInFile":true}'); } catch (e2) { /* storage full */ } }
+    } else localStorage.removeItem(key);
+    if (!api.recoveryWrite) return;
+    const sig = T ? TrackJson.sig() + '#' + CamJson.get().length : '', now = Date.now();
+    let tracks = null;
+    if (sig !== REC.sig[key]) {
+      // small tracking data is written at once; big data (a match with AI tracking) at most every 8 s
+      if (flush || (REC.size[key] || 0) < 3e6 || now - (REC.at[key] || 0) >= 8000) { tracks = '{"tracks":' + TrackJson.all() + ',"camera":' + CamJson.get() + '}'; REC.sig[key] = sig; REC.at[key] = now; REC.size[key] = tracks.length; }
+      else { clearTimeout(REC.timer); REC.timer = setTimeout(() => autosaveNow(), 8100 - (now - REC.at[key])); }
+    }
+    if (flush && api.recoveryWriteSync) api.recoveryWriteSync({ key, light, tracks });
+    else api.recoveryWrite({ key, light, tracks });
+  } catch (e) { AppLog.send('error', 'autosave: ' + (e && e.message || e)); }
 }
-window.addEventListener('beforeunload', autosaveNow);
-api.onClosing(autosaveNow);
+// tracking data of a quick session that was too big for the browser storage
+async function sessionExtra(saved, key) {
+  if (!saved || !saved.tracksInFile || !api.recoveryRead) return saved;
+  const r = await api.recoveryRead(key).catch(() => null);
+  if (r && r.tracks) { try { const o = JSON.parse(r.tracks); saved.tracks = o.tracks; saved.camera = o.camera; } catch (e) { /* damaged */ } }
+  return saved;
+}
+window.addEventListener('beforeunload', () => autosaveNow(true));
+api.onClosing(() => autosaveNow(true));
 
 /* ---------------------------------------------------------------- KEYBOARD */
 const modalOpen = () => !$('#settings').classList.contains('hidden') || Dlg.isOpen() || (typeof Draw !== 'undefined' && Draw.editing);

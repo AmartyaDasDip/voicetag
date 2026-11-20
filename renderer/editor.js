@@ -310,34 +310,50 @@ function timelineRows() {
   const order = { Home: 0, Away: 1, Neutral: 2 };
   return TR.tracks.filter(x => x.points.length).sort((a, b) => (a.kind === 'ball') - (b.kind === 'ball') || (order[a.team] || 0) - (order[b.team] || 0) || trackLabel(a).localeCompare(trackLabel(b), undefined, { numeric: true }));
 }
+// the bars are drawn once per data change into a hidden canvas (a full match has over a million points);
+// a redraw only copies that picture and moves the white "now" line
+const _tlImg = { key: '', cv: null, a: 0, b: 1 };
 function drawTrackTimeline() {
   const cv = document.querySelector('#trkTimeline'); if (!cv) return;
   const rows = timelineRows(); if (!rows.length) return;
-  const RH = 9, LW = 58, H = rows.length * RH + 4, W = cv.clientWidth || 320;
-  cv.width = W * devicePixelRatio; cv.height = H * devicePixelRatio; cv.style.height = H + 'px';
-  const ctx = cv.getContext('2d'); ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-  let a = Infinity, b = -Infinity; rows.forEach(r => { a = Math.min(a, r.points[0].t); b = Math.max(b, r.points[r.points.length - 1].t); });
-  const span = Math.max(0.5, b - a), X = t => LW + (t - a) / span * (W - LW - 2);
-  ctx.clearRect(0, 0, W, H); ctx.font = '8px Segoe UI, Arial'; ctx.textBaseline = 'middle';
-  rows.forEach((tk, i) => {
-    const y = i * RH + 2;
-    if (tk.id === TR.sel) { ctx.fillStyle = 'rgba(46,204,113,.18)'; ctx.fillRect(0, y - 1, W, RH); }
-    ctx.fillStyle = trackColor(tk); ctx.fillRect(1, y + 2, 4, RH - 5);
-    ctx.fillStyle = '#ccc'; ctx.fillText(trackLabel(tk).slice(0, 10), 8, y + RH / 2 - 0.5);
-    const gapMax = Number(tk.maxGap || TR.settings.maxGap || 3), pts = tk.points;
-    for (let k = 0; k < pts.length; k++) {
-      const p = pts[k], n = pts[k + 1];
-      const col = p.vis !== 'v' ? '#777' : p.src === 'manual' ? (p.orig ? '#ff4fd8' : '#4da3ff') : p.conf != null && p.conf < 0.4 ? '#f5b041' : '#2ecc71';
-      const x0 = X(p.t);
-      if (n && p.vis === 'v' && n.vis === 'v' && n.t - p.t <= gapMax) {
-        const dense = n.t - p.t <= 0.35;
-        ctx.globalAlpha = dense ? 0.95 : 0.35; ctx.fillStyle = dense ? col : '#9aa5b5'; ctx.fillRect(x0, y + 1, Math.max(1, X(n.t) - x0), RH - 3);
-      } else { ctx.globalAlpha = 1; ctx.fillStyle = col; ctx.fillRect(x0, y + 1, 1.5, RH - 3); }
-      if (p.orig) { ctx.globalAlpha = 1; ctx.fillStyle = '#ff4fd8'; ctx.fillRect(x0, y - 1, 1.5, RH); }
-    }
-    (tk.removed || []).forEach(r => { ctx.globalAlpha = 1; ctx.fillStyle = '#ff5a5f'; ctx.fillRect(X(r.t), y + RH - 3, 1.5, 2); });
-    ctx.globalAlpha = 1;
-  });
+  const RH = 9, LW = 58, H = rows.length * RH + 4, W = cv.clientWidth || 320, dpr = devicePixelRatio || 1;
+  const key = [Memo.rev, W, dpr, TR.sel, TR.settings.maxGap, rows.map(r => r.id).join(',')].join('|');
+  if (_tlImg.key !== key) {
+    const off = _tlImg.cv || document.createElement('canvas'); off.width = W * dpr; off.height = H * dpr;
+    const ctx = off.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    let a = Infinity, b = -Infinity; rows.forEach(r => { a = Math.min(a, r.points[0].t); b = Math.max(b, r.points[r.points.length - 1].t); });
+    const span = Math.max(0.5, b - a), X = t => LW + (t - a) / span * (W - LW - 2);
+    ctx.clearRect(0, 0, W, H); ctx.font = '8px Segoe UI, Arial'; ctx.textBaseline = 'middle';
+    rows.forEach((tk, i) => {
+      const y = i * RH + 2;
+      if (tk.id === TR.sel) { ctx.fillStyle = 'rgba(46,204,113,.18)'; ctx.fillRect(0, y - 1, W, RH); }
+      ctx.fillStyle = trackColor(tk); ctx.fillRect(1, y + 2, 4, RH - 5);
+      ctx.fillStyle = '#ccc'; ctx.fillText(trackLabel(tk).slice(0, 10), 8, y + RH / 2 - 0.5);
+      const gapMax = Number(tk.maxGap || TR.settings.maxGap || 3), pts = tk.points;
+      // neighbouring pieces of the same colour are merged, so only a few hundred rectangles are drawn per track
+      let run = null;
+      const flush = () => { if (!run) return; ctx.globalAlpha = run.al; ctx.fillStyle = run.col; ctx.fillRect(run.x0, y + 1, Math.max(run.w0, run.x1 - run.x0), RH - 3); run = null; };
+      const add = (x0, x1, col, al, w0) => { if (run && run.col === col && run.al === al && x0 <= run.x1 + 0.6) { if (x1 > run.x1) run.x1 = x1; return; } flush(); run = { x0, x1, col, al, w0 }; };
+      const marks = [];
+      for (let k = 0; k < pts.length; k++) {
+        const p = pts[k], n = pts[k + 1];
+        const col = p.vis !== 'v' ? '#777' : p.src === 'manual' ? (p.orig ? '#ff4fd8' : '#4da3ff') : p.conf != null && p.conf < 0.4 ? '#f5b041' : '#2ecc71';
+        const x0 = X(p.t);
+        if (n && p.vis === 'v' && n.vis === 'v' && n.t - p.t <= gapMax) { const dense = n.t - p.t <= 0.35; add(x0, X(n.t), dense ? col : '#9aa5b5', dense ? 0.95 : 0.35, 1); }
+        else add(x0, x0 + 1.5, col, 1, 1.5);
+        if (p.orig) marks.push(x0);
+      }
+      flush();
+      ctx.globalAlpha = 1; ctx.fillStyle = '#ff4fd8'; marks.forEach(x0 => ctx.fillRect(x0, y - 1, 1.5, RH));
+      (tk.removed || []).forEach(r => { ctx.fillStyle = '#ff5a5f'; ctx.fillRect(X(r.t), y + RH - 3, 1.5, 2); });
+      ctx.globalAlpha = 1;
+    });
+    Object.assign(_tlImg, { key, cv: off, a, b });
+  }
+  const { a, b } = _tlImg, span = Math.max(0.5, b - a), X = t => LW + (t - a) / span * (W - LW - 2);
+  if (cv.width !== W * dpr || cv.height !== H * dpr) { cv.width = W * dpr; cv.height = H * dpr; cv.style.height = H + 'px'; }
+  const ctx = cv.getContext('2d'); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height); ctx.drawImage(_tlImg.cv, 0, 0);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (hasVideo() && video.currentTime >= a && video.currentTime <= b) { ctx.fillStyle = '#fff'; ctx.fillRect(X(video.currentTime) - 0.5, 0, 1, H); }
   cv.onclick = e => {
     const r = cv.getBoundingClientRect(), i = Math.floor((e.clientY - r.top - 2) / RH), row = rows[i];

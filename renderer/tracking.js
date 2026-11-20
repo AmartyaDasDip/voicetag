@@ -79,8 +79,23 @@ const sortedCals = () => TR.cals.slice().sort((a, b) => a.t - b.t);
 /* ---- camera movement (measured by the AI engine) carries a calibration through camera pans.
    TR.camera = [{ id, pts: [[t, x, y], ...] }]: one entry per camera shot (a cut starts a new one); x, y = how far
    the picture content has moved (fractions of the frame) since the start of that shot. */
+const _camIdx = { arr: null, n: -1, order: [] };
 function camAt(t) {
   const segs = TR.camera || [];
+  if (segs.length > 8) {                                   // many shots: find the shot by binary search over start times
+    const n = segs.reduce((a, s) => a + s.pts.length, 0) + segs.length * 1e6;
+    if (_camIdx.arr !== segs || _camIdx.n !== n) { _camIdx.arr = segs; _camIdx.n = n; _camIdx.order = segs.map((s, i) => i).filter(i => segs[i].pts.length).sort((a, b) => segs[a].pts[0][0] - segs[b].pts[0][0] || a - b); }
+    const o = _camIdx.order; let lo = 0, hi = o.length - 1, best = -1;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (segs[o[m]].pts[0][0] - 0.06 <= t) { best = m; lo = m + 1; } else hi = m - 1; }
+    // the latest shot that started before t and still covers it (later entries win, as in the list order)
+    let pick = -1;
+    for (let k = best; k >= 0 && k >= best - 6; k--) { const s = segs[o[k]], p = s.pts; if (t <= p[p.length - 1][0] + 0.06 && (pick < 0 || o[k] > pick)) pick = o[k]; }
+    if (pick < 0) return null;
+    const p = segs[pick].pts; let lo2 = 0, hi2 = p.length - 1;
+    while (hi2 - lo2 > 1) { const m = (lo2 + hi2) >> 1; if (p[m][0] <= t) lo2 = m; else hi2 = m; }
+    const a = p[lo2], b = p[hi2], w = b[0] > a[0] ? clamp((t - a[0]) / (b[0] - a[0]), 0, 1) : 0;
+    return { seg: segs[pick].id, x: a[1] + (b[1] - a[1]) * w, y: a[2] + (b[2] - a[2]) * w };
+  }
   for (let s = segs.length - 1; s >= 0; s--) {
     const p = segs[s].pts; if (!p.length || t < p[0][0] - 0.06 || t > p[p.length - 1][0] + 0.06) continue;
     let lo = 0, hi = p.length - 1;
@@ -104,7 +119,17 @@ function metresPerWidth(c) {
 const carryErr = (c, d) => 0.2 * Math.hypot(d[0], d[1] * 0.56) * metresPerWidth(c);
 const CARRY_MAX_ERR = 4;   // metres – beyond this a carried calibration is not used
 // calibration valid at time t (segment = from this calibration until the next one)
+// calAt is asked for the same moments again and again (every track at the same frame times, trails, statistics):
+// results are kept until the data changes
+const _calCache = { rev: -1, cals: null, n: -1, m: new Map() };
 function calAt(t) {
+  const c = _calCache;
+  if (c.rev !== Memo.rev || c.cals !== TR.cals || c.n !== TR.cals.length) { c.rev = Memo.rev; c.cals = TR.cals; c.n = TR.cals.length; c.m.clear(); }
+  let v = c.m.get(t); if (v !== undefined) return v;
+  v = calAtRaw(t); if (c.m.size > 250000) c.m.clear(); c.m.set(t, v);
+  return v;
+}
+function calAtRaw(t) {
   // close-ups, replays and other shots never get a pitch calibration (segment-based calibration, phase 0.8)
   if (typeof shotAt === 'function' && TR.shots && TR.shots.length) { const sh = shotAt(t); if (sh && !trackableShot(sh)) return null; }
   const cs = sortedCals();
@@ -750,4 +775,5 @@ HOOKS.render.push(tab => {
   if (!tab) { paintTracking(true); render2D(true); }
 });
 window.addEventListener('resize', () => { paintTracking(true); });
-video.addEventListener('seeked', () => { if (TR.on) { paintTracking(true); if (!$('#tab-track').classList.contains('hidden')) renderTrackTab(); } });
+let _seekTab = null;
+video.addEventListener('seeked', () => { if (TR.on) { paintTracking(true); if (!$('#tab-track').classList.contains('hidden') && !_seekTab) _seekTab = setTimeout(() => { _seekTab = null; renderTrackTab(); }, 250); } });

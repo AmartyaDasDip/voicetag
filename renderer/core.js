@@ -226,7 +226,7 @@ function DEFAULT_CONFIG() {
       homeName: 'Home', awayName: 'Opposition', voiceControl: true, useGrammar: true,
       ptt: false, pttKey: 'ControlRight', samePlayerSay: 'same player, same, him',
       askLocation: true, autoZone: true, freezeDur: 3, titleDur: 2.5, micKey: 'F9',
-      homeColor: '#3ea6ff', awayColor: '#ff5a5f', pitchL: 105, pitchW: 68
+      homeColor: '#3ea6ff', awayColor: '#ff5a5f', pitchL: 105, pitchW: 68, updateCheck: true
     },
     codes: DEFAULT_CODES(), outcomes: DEFAULT_OUTCOMES(), labelGroups: DEFAULT_LABELGROUPS(),
     players: DEFAULT_PLAYERS(), customPhrases: [], kpis: DEFAULT_KPIS()
@@ -279,7 +279,7 @@ function loadConfig() {
   return DEFAULT_CONFIG();
 }
 let config = loadConfig();
-function saveConfig() { try { localStorage.setItem('vt_config3', JSON.stringify(config)); } catch (e) { /* ignore */ } }
+function saveConfig() { if (typeof dataChanged === 'function') dataChanged(); try { localStorage.setItem('vt_config3', JSON.stringify(config)); } catch (e) { /* ignore */ } }
 
 /* ---------------------------------------------------------------- VOCABULARY */
 function playerSpokenList(p) { const l = splitAliases(p.say); return l.length ? l : splitAliases(autoSay(p)); }
