@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('api', {
   ffmpegInfo: () => ipcRenderer.invoke('ffmpeg-info'),
   showInFolder: p => ipcRenderer.invoke('show-in-folder', p),
   exportClips: opts => ipcRenderer.invoke('export-clips', opts),
+  exportTarget: opts => ipcRenderer.invoke('export-target', opts),
+  annOverlaysDrop: () => ipcRenderer.invoke('ann-overlays-drop'),
   cancelExport: () => ipcRenderer.invoke('cancel-export'),
   onExportProgress: cb => ipcRenderer.on('export-progress', (e, p) => cb(p)),
   convertVideo: p => ipcRenderer.invoke('convert-video', p),

@@ -251,21 +251,38 @@ ipcMain.handle('model-info', async () => ({ available: !!modelFile(), url: 'app:
 ipcMain.handle('ffmpeg-info', async () => ({ available: !!ffmpegPath() }));
 ipcMain.handle('show-in-folder', async (e, p) => { if (p) shell.showItemInFolder(p); });
 
-let currentExport = null;
+let currentExport = null, pickedTarget = null;
+async function askExportTarget(mode, defaultName) {
+  if (mode === 'single') {
+    const r = await dialog.showSaveDialog(win, { title: 'Save joined video', defaultPath: defaultName || 'clips.mp4', filters: [{ name: 'MP4 video', extensions: ['mp4'] }] });
+    return r.canceled || !r.filePath ? null : r.filePath;
+  }
+  const r = await dialog.showOpenDialog(win, { title: 'Choose a folder for the clips', properties: ['openDirectory', 'createDirectory'] });
+  return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
+}
+// 3.3: with annotations the window first asks where to save, then draws the annotation layers, then exports
+ipcMain.handle('export-target', async (e, { mode, defaultName } = {}) => {
+  const target = await askExportTarget(mode, defaultName);
+  pickedTarget = target ? { mode, target } : null;
+  return target ? { ok: true } : { ok: false, canceled: true };
+});
 ipcMain.handle('export-clips', async (e, opts) => {
   const ff = ffmpegPath();
-  if (!ff) return { ok: false, error: 'ffmpeg is missing. Re-run BUILD.bat to rebuild the app.' };
-  if (!opts.videoPath || !fs.existsSync(opts.videoPath)) return { ok: false, error: 'The source video file was not found: ' + opts.videoPath };
-  let target;
-  if (opts.mode === 'single') {
-    const r = await dialog.showSaveDialog(win, { title: 'Save joined video', defaultPath: opts.defaultName || 'clips.mp4', filters: [{ name: 'MP4 video', extensions: ['mp4'] }] });
-    if (r.canceled || !r.filePath) return { ok: false, canceled: true };
-    target = r.filePath;
-  } else {
-    const r = await dialog.showOpenDialog(win, { title: 'Choose a folder for the clips', properties: ['openDirectory', 'createDirectory'] });
-    if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true };
-    target = r.filePaths[0];
-  }
+  const overlays = (opts.clips || []).map(c => c && c.overlay && c.overlay.path ? path.resolve(c.overlay.path) : null).filter(Boolean);
+  try {
+    if (!ff) return { ok: false, error: 'ffmpeg is missing. Re-run BUILD.bat to rebuild the app.' };
+    if (!opts.videoPath || !fs.existsSync(opts.videoPath)) return { ok: false, error: 'The source video file was not found: ' + opts.videoPath };
+    // only annotation layers this app run made itself are used
+    (opts.clips || []).forEach(c => { if (c && c.overlay && !(c.overlay.path && annOverlays.has(path.resolve(c.overlay.path)))) delete c.overlay; });
+    let target;
+    if (opts.useTarget && pickedTarget && pickedTarget.mode === opts.mode) target = pickedTarget.target;
+    else target = await askExportTarget(opts.mode, opts.defaultName);
+    pickedTarget = null;
+    if (!target) return { ok: false, canceled: true };
+    return await runClipExport(e, ff, opts, target);
+  } finally { dropOverlays(overlays.filter(p => annOverlays.has(p))); }
+});
+async function runClipExport(e, ff, opts, target) {
   currentExport = exporter.createJob();
   try {
     const out = await exporter.exportClips({
@@ -278,7 +295,7 @@ ipcMain.handle('export-clips', async (e, opts) => {
     if (!(currentExport && currentExport.cancelled)) logLine('error', 'export', 'video export failed: ' + (err.message || err));
     return { ok: false, error: currentExport && currentExport.cancelled ? 'Export cancelled' : String(err.message || err) };
   } finally { currentExport = null; }
-});
+}
 /* ---- convert any format to a playable MP4 (cached, done once per file) ---- */
 const crypto = require('crypto');
 let currentConvert = null;
@@ -316,21 +333,32 @@ ipcMain.handle('cancel-convert', async () => { if (currentConvert) exporter.canc
 
 /* ------------------------------------------------------------------ 3D VIDEO (frames from the 3D view → MP4) */
 let v3job = null;
+const annOverlays = new Set();   // temp annotation layers made by this app run (the only overlay files export-clips accepts)
+function dropOverlays(list) { (list || [...annOverlays]).forEach(p => { annOverlays.delete(p); try { fs.rmSync(p, { force: true }); } catch (e) { /* ignore */ } }); }
+app.on('will-quit', () => dropOverlays());
+ipcMain.handle('ann-overlays-drop', async () => { dropOverlays(); return true; });
 function v3Abort() { if (!v3job) return; const j = v3job; v3job = null; try { j.proc.kill('SIGKILL'); } catch (e) { /* ignore */ } try { fs.rmSync(j.part, { force: true }); } catch (e) { /* ignore */ } }
 // frames rendered in the window → MP4. Used by the 3D replay (JPEG frames) and by the annotated video (3.1): there the
 // frames are transparent PNG overlays that ffmpeg lays over the original video (`under`), with its sound
-ipcMain.handle('v3d-begin', async (e, { defaultName, fps, w, h, title, under }) => {
+ipcMain.handle('v3d-begin', async (e, { defaultName, fps, w, h, title, under, overlay }) => {
   const ff = ffmpegPath();
   if (!ff) return { ok: false, error: 'ffmpeg is missing from this build.' };
   v3Abort();
   if (under && (!under.path || !allowedMedia.has(path.resolve(under.path)))) return { ok: false, error: 'The video file is not available.' };
-  const r = await dialog.showSaveDialog(win, { title: title || 'Save 3D video', defaultPath: defaultName || '3D replay.mp4', filters: [{ name: 'MP4 video', extensions: ['mp4'] }] });
-  if (r.canceled || !r.filePath) return { ok: false, cancelled: true };
-  const out = /\.mp4$/i.test(r.filePath) ? r.filePath : r.filePath + '.mp4', part = out + '.part.mp4';
+  let out, part;
+  if (overlay) {   // 3.3: a transparent annotation layer for the clip / playlist export – a temp file, no dialog
+    out = path.join(app.getPath('temp'), `tactiq-ann-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mov`); part = out + '.part.mov';
+  } else {
+    const r = await dialog.showSaveDialog(win, { title: title || 'Save 3D video', defaultPath: defaultName || '3D replay.mp4', filters: [{ name: 'MP4 video', extensions: ['mp4'] }] });
+    if (r.canceled || !r.filePath) return { ok: false, cancelled: true };
+    out = /\.mp4$/i.test(r.filePath) ? r.filePath : r.filePath + '.mp4'; part = out + '.part.mp4';
+  }
   fs.mkdirSync(path.dirname(out), { recursive: true });
   const fpsN = Math.max(10, Math.min(60, Number(fps) || 30));
   const W = Math.max(64, Math.round(Number(w) / 2) * 2 || 1280), H = Math.max(64, Math.round(Number(h) / 2) * 2 || 720);
-  const args = under
+  const args = overlay
+    ? ['-hide_banner', '-y', '-f', 'image2pipe', '-framerate', String(fpsN), '-c:v', 'png', '-i', '-', '-vf', `scale=${W}:${H}`, '-c:v', 'qtrle', '-pix_fmt', 'argb', '-f', 'mov', part]
+    : under
     ? ['-hide_banner', '-y', '-ss', String(Math.max(0, Number(under.t0) || 0)), '-t', String(Math.max(0.1, Number(under.dur) || 1)), '-i', under.path,
       '-f', 'image2pipe', '-framerate', String(fpsN), '-c:v', 'png', '-i', '-',
       '-filter_complex', `[0:v]scale=${W}:${H},setsar=1,fps=${fpsN}[b];[1:v]format=rgba,scale=${W}:${H}[o];[b][o]overlay=0:0:eof_action=pass:format=auto[v]`,
@@ -339,7 +367,7 @@ ipcMain.handle('v3d-begin', async (e, { defaultName, fps, w, h, title, under }) 
     : ['-hide_banner', '-y', '-f', 'image2pipe', '-framerate', String(fpsN), '-c:v', 'mjpeg', '-i', '-',
       '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-r', String(fpsN), '-movflags', '+faststart', '-f', 'mp4', part];
   const proc = require('child_process').spawn(ff, args, { windowsHide: true });
-  const job = { proc, out, part, err: '', exited: false };
+  const job = { proc, out, part, err: '', exited: false, overlay: !!overlay };
   job.done = new Promise(res => proc.on('close', code => { job.exited = true; res(code); }));
   proc.on('error', err => { job.err += String(err.message || err); });
   proc.stderr.on('data', d => { job.err = (job.err + d).slice(-3000); });
@@ -358,7 +386,11 @@ ipcMain.handle('v3d-end', async (e, { cancel } = {}) => {
   v3job = null;
   try { j.proc.stdin.end(); } catch (err) { /* ignore */ }
   const code = await j.done;
-  if (code === 0 && fs.existsSync(j.part)) { fs.renameSync(j.part, j.out); allowedMedia.add(path.resolve(j.out)); return { ok: true, file: j.out }; }
+  if (code === 0 && fs.existsSync(j.part)) {
+    fs.renameSync(j.part, j.out);
+    if (j.overlay) annOverlays.add(path.resolve(j.out)); else allowedMedia.add(path.resolve(j.out));
+    return { ok: true, file: j.out };
+  }
   try { fs.rmSync(j.part, { force: true }); } catch (err) { /* ignore */ }
   const msg = (j.err || 'ffmpeg exit code ' + code).split('\n').filter(Boolean).slice(-3).join(' | ');
   logLine('error', '3d', 'video failed: ' + msg);

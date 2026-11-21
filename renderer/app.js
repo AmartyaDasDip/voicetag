@@ -454,6 +454,8 @@ function runControl(cmd) {
 function handleParsed(parsed, snapFor, source) {
   const heard = parsed.text;
   if (typeof trackIdentityCommand === 'function' && trackIdentityCommand(heard)) { logVoice(heard, 'Track identity', 'ok'); return; }
+  const ac = typeof annCommand === 'function' ? annCommand(heard, hasVideo() ? timeFromSnap(snapFor(0), source === 'voice' ? config.general.offset : 0) : null) : null;
+  if (ac) { logVoice(heard, ac.msg, ac.ok ? 'ok' : 'bad'); toast(ac.ok ? '✓ ' + ac.msg : ac.msg, ac.ok ? 'ok' : 'bad', ac.ok ? 1800 : 3000); beep(ac.ok); return; }
   if (parsed.control) { logVoice(heard, 'Command: ' + parsed.control, 'ok'); runControl(parsed.control); return; }
   // a fragment with words the engine could not make out ("right [unk]") must not change an earlier tag
   if (parsed.labelsOnly && source === 'voice' && (/\[unk\]/.test(heard) || parsed.score < 0.8)) {
@@ -1006,7 +1008,10 @@ function renderHelp() {
     <li><b>Click an annotation</b> (no tool chosen) to select it – on the video or in 3D: a colour button recolours it; <b>⇤ start here</b> / <b>end here ⇥</b> set its time to the current moment; −1 s / +1 s; ✎ text; 🗑 or the Delete key removes it. Drag a selected zone to move it, or its corner squares to resize it. Esc deselects. Ctrl+Z undoes everything.</li>
     <li><b>⏮ ⏭</b> step through the annotations like slides (paused and selected) – handy in a team meeting. 📋 lists them all.</li>
     <li>They also appear on the <b>🗺 2D</b> pitch, in the <b>🧊 3D</b> view (also in 3D replays and their MP4) and in 📷 screenshots. In 3D the camera <b>Annotations – frames them</b> shows them all; click a figure to select that player, double-click the grass to centre the free camera there.</li>
+    <li><b>Say or type them</b> (command box, or 🎤 voice): “spotlight nine”, “spotlight away ten”, “name tag seven”, “run arrow eleven”, “distance nine and four”, “offside line away”, “back line home” (or the team’s name), “next annotation”, “previous annotation”, “delete annotation”. An annotation said while the video plays starts at the moment you began speaking. Players are found by the squad number given to their track (✎ in the Track tab, or “this is nine”); “spotlight this” uses the selected track. Words that are one of your codes (e.g. “run …”) keep tagging while the palette is closed.</li>
     <li><b>🎬</b> in the palette saves the clip IN–OUT (or the time around your annotations) as an <b>MP4 with the annotations burnt in</b>, with sound, 720p or 1080p – optionally with all tracking markers.</li>
+    <li>In the <b>🎞 Playlist</b> export, tick <b>✨ Annotations</b> to have them drawn into the highlight video or the separate clips (together with the captions and freeze-frame drawings). They are drawn first – the progress bar shows “Drawing the annotations” – then the clips are cut. Not with the Fast (approximate) cuts.</li>
+    <li>Joining two tracks keeps their annotations; splitting a track moves the annotations from the split onwards to the new part; deleting a track (or re-importing the AI result over it) removes its annotations too – Ctrl+Z brings them back. In tracking mode the clicks on the video set tracking points even with the palette open (choose a tool to annotate).</li>
     <li>Distances, runs, zones, the offside line and the back line need a pitch calibration; without one, spotlights, tags and lines still follow the players on the video.</li></ol>
     <h3>📺 Broadcast / TV footage (Track tab)</h3>
     <ol><li><b>📺 Scan camera shots</b> finds every camera cut and sorts the shots: <b>wide</b> and <b>medium</b> (usable for 2D tracking), <b>close-up</b> and <b>other</b> (crowd, bench, graphics). About 1–3 minutes per 10 minutes of video.</li>

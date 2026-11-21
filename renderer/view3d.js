@@ -552,6 +552,7 @@ async function v3Snapshot() {
 }
 async function v3Export(o) {
   if (!api.v3dBegin) { toast('Saving 3D video works in the installed desktop app', 'bad'); return null; }
+  if (V3.exporting || (typeof Ann !== 'undefined' && Ann.exporting) || (typeof PL !== 'undefined' && PL.job)) { toast('Another video is being saved – wait until it is finished', 'bad', 3000); return null; }
   const base = `${(project.info && project.info.name) || 'match'} 3D ${fmtTime(o.t0).replace(':', '-')}-${fmtTime(o.t1).replace(':', '-')}.mp4`.replace(/[\\/:*?"<>|]/g, '');
   const b = await api.v3dBegin({ defaultName: project.dir ? project.dir + '/clips/' + base : base, fps: o.fps, w: o.w, h: o.h });
   if (!b || !b.ok) { if (b && b.error) toast('Could not start the video: ' + b.error, 'bad', 5000); return null; }

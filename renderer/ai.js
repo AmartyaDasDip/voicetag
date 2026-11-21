@@ -310,7 +310,8 @@ function aiImport(res, ch) {
   if (n.ar && !ch.keepOff) left.push(`${n.ar} assistant referee${n.ar > 1 ? 's' : ''}`);
   if (n.staff && !ch.keepOff) left.push(`${n.staff} people outside the pitch`);
   if (n.short) left.push(`${n.short} short tracks`);
-  toast(`Imported ${parts.join(' and ')}` + (left.length ? ` – left out ${left.join(', ')}` : '') + (n.unknown ? ` · ${n.unknown} unsure (hidden)` : '') + (roles ? '' : ' · no pitch calibration: calibrate and re-import to sort out referees and staff'), roles ? 'ok' : 'info', 5000);
+  const pruned = typeof annPrune === 'function' ? annPrune() : 0;   // annotations of AI tracks that were replaced
+  toast(`Imported ${parts.join(' and ')}` + (left.length ? ` – left out ${left.join(', ')}` : '') + (n.unknown ? ` · ${n.unknown} unsure (hidden)` : '') + (roles ? '' : ' · no pitch calibration: calibrate and re-import to sort out referees and staff') + annPruneNote(pruned), roles ? 'ok' : 'info', 5000);
   return n;
 }
 
@@ -320,6 +321,8 @@ function aiClearTracks() {
   checkpoint();
   TR.tracks = TR.tracks.filter(t => !t.ai || t.kind === 'ball' && (t.points = t.points.filter(p => p.src !== 'ai')).length);
   if (TR.sel && !TR.tracks.some(t => t.id === TR.sel)) TR.sel = null;
+  const pruned = typeof annPrune === 'function' ? annPrune() : 0;
+  if (pruned) toast(`${pruned} annotation${pruned > 1 ? 's' : ''} of the removed tracks removed too (Ctrl+Z brings them back)`, 'info', 3500);
   markDirty(); autosave(); renderTrackTab(); paintTracking(true);
 }
 
@@ -369,6 +372,7 @@ function splitTrackHere() {
   const nk = newTrack({ team: tk.team, kind: tk.kind, label: (tk.label || 'P') + '′', ai: tk.ai ? Object.assign({}, tk.ai) : undefined });
   nk.points = after; if (tk.removed) { nk.removed = tk.removed.filter(r => r.t >= t); tk.removed = tk.removed.filter(r => r.t < t); }
   logCorrection(tk, t, 'split', trackLabel(nk));
+  if (typeof annRetarget === 'function') annRetarget(tk.id, nk.id, t);   // annotations from the split on follow the new part
   TR.sel = nk.id;
   markDirty(); autosave(); renderTrackTab(); paintTracking(true);
   toast('Split: the part from ' + fmtTime(t) + ' is now “' + trackLabel(nk) + '” – use ✎ to say who it is', 'ok', 3500);

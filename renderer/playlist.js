@@ -4,7 +4,7 @@
    (one video, separate clips, or one folder per player) with title
    cards, captions and freeze-frame drawings.
    ===================================================================== */
-const PL = { codes: new Set(), excluded: new Set(), queue: [], idx: -1, active: false };
+const PL = { codes: new Set(), excluded: new Set(), queue: [], idx: -1, active: false, job: null };
 function playlistItems() {
   const pp = $('#plPlayer').value, po = $('#plOutcome').value, pl = $('#plLabel').value;
   if (typeof plSource === 'function' && plSource() === 'clips') return clipItems().filter(e => !pp || e.playerId === pp);
@@ -120,29 +120,56 @@ async function exportVideo(mode) {
   if (!videoInfo.path) { alert('Open the match video first (the original file is needed to cut the clips).'); return; }
   const ff = await api.ffmpegInfo();
   if (!ff.available) { alert('The video tool (ffmpeg) is missing from this installation.'); return; }
+  if (PL.job || (typeof Ann !== 'undefined' && Ann.exporting) || (typeof V3 !== 'undefined' && V3.exporting)) { toast('Another video is being saved – wait until it is finished', 'bad', 3000); return; }
   const fast = $('#plQuality').value === 'fast';
   const wantTitle = !fast && $('#plTitle').checked, wantCap = !fast && $('#plCaption').checked, wantDraw = !fast && $('#plDraw').checked;
+  const wantAnn = !fast && $('#plAnn').checked && typeof annSpan === 'function' && (TR.anns || []).length > 0;
   const W = video.videoWidth || 1280, H = video.videoHeight || 720;
   $('#plProgress').classList.remove('hidden'); $('#plBar').style.width = '0%'; $('#plProgText').textContent = 'Preparing…';
   const btns = ['#plExportOne', '#plExportSep', '#plExportPlayer'].map(s => $(s)); btns.forEach(b => b.disabled = true);
+  const job = PL.job = { cancel: false };
   try {
-    const payload = clips.map(c => ({
+    const xmode = mode === 'player' ? 'separate' : mode;
+    const defaultName = (videoInfo.name || 'match').replace(/\.[^.]+$/, '') + ' - ' + [...new Set(clips.map(c => c.code))].join('+').replace(/[\\/:*?"<>|]/g, '') + '.mp4';
+    // 3.3: the annotations are drawn into the clips – first where to save, then the annotation layers, then the cut
+    const spans = clips.map(c => wantAnn ? annSpan(Math.max(0, c.start), c.end) : null);
+    const layers = [];
+    if (spans.some(Boolean)) {
+      const pt = await api.exportTarget({ mode: xmode, defaultName });
+      if (!pt || !pt.ok) return;
+      const hh = Math.min(H, 1080), ww = Math.round(W * hh / H / 2) * 2, todo = spans.filter(Boolean).length;
+      let done = 0;
+      for (let i = 0; i < clips.length; i++) {
+        if (!spans[i]) continue;
+        const lay = await annOverlayFile(spans[i][0], spans[i][1], ww, hh, (k, n) => {
+          $('#plBar').style.width = Math.round((done + k / n) / todo * 100) + '%';
+          $('#plProgText').textContent = `✨ Drawing the annotations – clip ${done + 1} of ${todo} (${Math.round(k / n * 100)}%)`;
+        }, job);
+        if (!lay || job.cancel) { api.annOverlaysDrop(); toast('Export cancelled', 'bad'); return; }
+        layers[i] = lay; done++;
+      }
+      $('#plBar').style.width = '0%';
+    }
+    const payload = clips.map((c, i) => ({
       start: Math.max(0, c.start), end: c.end, name: clipName(c),
       folder: mode === 'player' ? (c.playerId ? playerLabel(c) + (c.name ? ' ' + c.name : '') : 'No player') : '',
       title: wantTitle ? titleCardPNG(c, W, H) : null,
       caption: wantCap ? captionPNG(c, W, H) : null,
-      drawings: wantDraw ? (c.drawings || []).filter(d => d.t >= c.start && d.t <= c.end).map(d => ({ t: d.t, dur: d.dur || 3, png: drawingPNG(d.shapes, W, H) })) : []
+      drawings: wantDraw ? (c.drawings || []).filter(d => d.t >= c.start && d.t <= c.end).map(d => ({ t: d.t, dur: d.dur || 3, png: drawingPNG(d.shapes, W, H) })) : [],
+      overlay: layers[i] || null
     }));
-    const codes = [...new Set(clips.map(c => c.code))].join('+');
     const r = await api.exportClips({
-      videoPath: videoInfo.playPath || videoInfo.path, mode: mode === 'player' ? 'separate' : mode, quality: fast ? 'fast' : 'accurate',
-      titleDur: Number(config.general.titleDur) || 2.5,
-      defaultName: (videoInfo.name || 'match').replace(/\.[^.]+$/, '') + ' - ' + codes.replace(/[\\/:*?"<>|]/g, '') + '.mp4',
+      videoPath: videoInfo.playPath || videoInfo.path, mode: xmode, quality: fast ? 'fast' : 'accurate',
+      titleDur: Number(config.general.titleDur) || 2.5, defaultName, useTarget: layers.some(Boolean),
       clips: payload
     });
-    if (r.ok) { toast('Video export finished', 'ok', 3000); if (r.path) api.showInFolder(r.path); }
+    if (r.ok) { toast('Video export finished' + (layers.some(Boolean) ? ' – with the annotations' : ''), 'ok', 3000); if (r.path) api.showInFolder(r.path); }
     else if (!r.canceled) alert('Export failed:\n\n' + r.error);
+  } catch (e) {
+    api.annOverlaysDrop && api.annOverlaysDrop();
+    alert('Export failed:\n\n' + (e && e.message || e));
   } finally {
+    PL.job = null;
     $('#plProgress').classList.add('hidden');
     btns.forEach(b => b.disabled = false);
   }
@@ -154,4 +181,4 @@ api.onExportProgress(p => {
 $('#plExportOne').onclick = () => exportVideo('single');
 $('#plExportSep').onclick = () => exportVideo('separate');
 $('#plExportPlayer').onclick = () => exportVideo('player');
-$('#plCancel').onclick = () => api.cancelExport();
+$('#plCancel').onclick = () => { if (PL.job) PL.job.cancel = true; api.cancelExport(); };

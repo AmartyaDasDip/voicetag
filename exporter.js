@@ -86,12 +86,35 @@ function encArgs(fmt) {
   return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-video_track_timescale', '90000',
     ...(fmt.audio ? ['-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2'] : ['-an'])];
 }
-function videoSegArgs(src, s, e, caption, out, fmt) {
+// the annotation layer (3.3, a transparent .mov drawn in the window from ov.t0 to ov.t1) for the part s–e of the video:
+// seek into it when it began earlier, or delay it when it begins later
+function annLayer(ov, s, e) {
+  if (!ov || !ov.path || !(ov.t1 > s + 0.02) || !(ov.t0 < e - 0.02)) return null;
+  const seek = Math.max(0, s - ov.t0), delay = Math.max(0, ov.t0 - s);
+  return { args: [...(seek > 0.001 ? ['-ss', seek.toFixed(3)] : []), '-i', ov.path], delay };
+}
+function videoSegArgs(src, s, e, caption, out, fmt, ov) {
   const { W, H, F } = fmt;
-  const base = `[0:v]scale=${W}:${H},setsar=1,fps=${F}`;
-  const filter = caption ? `${base}[v0];[1:v]scale=${W}:${H}[c];[v0][c]overlay=0:0,format=yuv420p[v]` : `${base},format=yuv420p[v]`;
-  return ['-hide_banner', '-y', '-ss', s.toFixed(3), '-i', src, ...(caption ? ['-i', caption] : []), '-t', Math.max(0.05, e - s).toFixed(3),
-    '-filter_complex', filter, '-map', '[v]', ...(fmt.audio ? ['-map', '0:a:0'] : []), ...encArgs(fmt), out];
+  const ins = ['-ss', s.toFixed(3), '-i', src], chain = [`[0:v]scale=${W}:${H},setsar=1,fps=${F}[v0]`];
+  let cur = 'v0', k = 1;
+  const lay = annLayer(ov, s, e);
+  if (lay) {   // the annotations under the caption
+    ins.push(...lay.args);
+    chain.push(`[${k}:v]format=rgba,scale=${W}:${H},setpts=PTS-STARTPTS+${lay.delay.toFixed(3)}/TB[a${k}]`, `[${cur}][a${k}]overlay=0:0:eof_action=pass:format=auto[v${k}]`);
+    cur = 'v' + k; k++;
+  }
+  if (caption) { ins.push('-i', caption); chain.push(`[${k}:v]scale=${W}:${H}[c]`, `[${cur}][c]overlay=0:0[v${k}]`); cur = 'v' + k; k++; }
+  chain.push(`[${cur}]format=yuv420p[v]`);
+  return ['-hide_banner', '-y', ...ins, '-t', Math.max(0.05, e - s).toFixed(3),
+    '-filter_complex', chain.join(';'), '-map', '[v]', ...(fmt.audio ? ['-map', '0:a:0'] : []), ...encArgs(fmt), out];
+}
+// one still picture of the video at t (with the annotations of that moment when there is a layer)
+function frameArgs(src, t, ov, out, fmt) {
+  const lay = ov && ov.path && t >= ov.t0 - 0.001 && t < ov.t1 ? Math.max(0, t - ov.t0) : null;
+  if (lay == null) return ['-hide_banner', '-y', '-ss', t.toFixed(3), '-i', src, '-frames:v', '1', '-vf', `scale=${fmt.W}:${fmt.H}`, out];
+  // both from 0, so the first picture of the video meets the first picture of the layer
+  return ['-hide_banner', '-y', '-ss', t.toFixed(3), '-i', src, '-ss', lay.toFixed(3), '-i', ov.path,
+    '-filter_complex', `[0:v]scale=${fmt.W}:${fmt.H},setsar=1,setpts=PTS-STARTPTS[b];[1:v]format=rgba,scale=${fmt.W}:${fmt.H},setpts=PTS-STARTPTS[a];[b][a]overlay=0:0:format=auto[v]`, '-map', '[v]', '-frames:v', '1', out];
 }
 function stillSegArgs(basePng, overPng, dur, out, fmt) {
   const { W, H, F } = fmt;
@@ -119,12 +142,13 @@ async function exportWithExtras(opts) {
     if (c.title) segs.push({ kind: 'still', dur: titleDur, base: writePng(c.title, path.join(work, `t${i}.png`)) });
     const cap = c.caption ? writePng(c.caption, path.join(work, `c${i}.png`)) : null;
     let cur = Math.max(0, c.start);
+    const ov = c.overlay && c.overlay.path ? { path: c.overlay.path, t0: Number(c.overlay.t0) || 0, t1: Number(c.overlay.t1) || 0 } : null;
     (c.drawings || []).filter(d => d.t >= c.start && d.t <= c.end).sort((a, b) => a.t - b.t).forEach((d, k) => {
-      if (d.t - cur > 0.04) segs.push({ kind: 'video', s: cur, e: d.t, cap });
-      segs.push({ kind: 'freeze', t: d.t, dur: Math.max(0.5, Number(d.dur) || 3), over: writePng(d.png, path.join(work, `d${i}_${k}.png`)) });
+      if (d.t - cur > 0.04) segs.push({ kind: 'video', s: cur, e: d.t, cap, ov });
+      segs.push({ kind: 'freeze', t: d.t, dur: Math.max(0.5, Number(d.dur) || 3), over: writePng(d.png, path.join(work, `d${i}_${k}.png`)), ov });
       cur = d.t;
     });
-    if (c.end - cur > 0.04) segs.push({ kind: 'video', s: cur, e: c.end, cap });
+    if (c.end - cur > 0.04) segs.push({ kind: 'video', s: cur, e: c.end, cap, ov });
     return { c, segs };
   });
   const total = plan.reduce((s, p) => s + p.segs.reduce((a, g) => a + (g.kind === 'video' ? g.e - g.s : g.dur), 0), 0) || 1;
@@ -137,11 +161,11 @@ async function exportWithExtras(opts) {
       for (const g of plan[i].segs) {
         const out = path.join(work, `seg${String(n++).padStart(5, '0')}.mp4`);
         const len = g.kind === 'video' ? g.e - g.s : g.dur;
-        if (g.kind === 'video') await runFfmpeg(ffmpeg, videoSegArgs(videoPath, g.s, g.e, g.cap, out, fmt), job, s => report(i, Math.min(s, len)));
+        if (g.kind === 'video') await runFfmpeg(ffmpeg, videoSegArgs(videoPath, g.s, g.e, g.cap, out, fmt, g.ov), job, s => report(i, Math.min(s, len)));
         else if (g.kind === 'still') await runFfmpeg(ffmpeg, stillSegArgs(g.base, null, g.dur, out, fmt), job);
         else {
           const frame = path.join(work, `f${n}.png`);
-          await runFfmpeg(ffmpeg, ['-hide_banner', '-y', '-ss', g.t.toFixed(3), '-i', videoPath, '-frames:v', '1', '-vf', `scale=${fmt.W}:${fmt.H}`, frame], job);
+          await runFfmpeg(ffmpeg, frameArgs(videoPath, g.t, g.ov, frame, fmt), job);
           await runFfmpeg(ffmpeg, stillSegArgs(frame, g.over, g.dur, out, fmt), job);
         }
         done += len; report(i, 0);
@@ -166,13 +190,13 @@ async function exportWithExtras(opts) {
 }
 
 /**
- * opts: { ffmpeg, videoPath, clips:[{start,end,name,folder,title,caption,drawings}], mode:'single'|'separate',
+ * opts: { ffmpeg, videoPath, clips:[{start,end,name,folder,title,caption,drawings,overlay:{path,t0,t1}}], mode:'single'|'separate',
  *         quality:'accurate'|'fast', target, tempRoot, job, onProgress, titleDur }
  */
 async function exportClips(opts) {
   const { ffmpeg, videoPath, clips, mode, quality, target, job, onProgress } = opts;
   if (!clips || !clips.length) throw new Error('No clips selected');
-  const extras = quality !== 'fast' && clips.some(c => c.title || c.caption || (c.drawings && c.drawings.length));
+  const extras = quality !== 'fast' && clips.some(c => c.title || c.caption || (c.drawings && c.drawings.length) || c.overlay);
   if (extras) return exportWithExtras(opts);
   const total = clips.reduce((s, c) => s + Math.max(0.1, c.end - c.start), 0);
   let done = 0;

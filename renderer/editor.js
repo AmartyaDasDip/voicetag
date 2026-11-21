@@ -20,6 +20,7 @@ function mergeTracks(keep, other) {
   if ((keep.team === 'Neutral' || keep.kind === 'other') && (other.team === 'Home' || other.team === 'Away')) { keep.team = other.team; keep.kind = 'player'; }
   TR.tracks = TR.tracks.filter(x => x !== other);
   if (TR.sel === other.id) TR.sel = keep.id;
+  if (typeof annRetarget === 'function') annRetarget(other.id, keep.id);
   logCorrection(keep, other.points.length ? other.points[0].t : 0, 'join', trackLabel(other));
   return keep;
 }

@@ -19,6 +19,7 @@ const ANN_TYPES = {
   backline: { name: 'Back line', icon: '🛡', picks: 1, hint: 'Click any player of a team – its last line (the 4 deepest outfield players) is connected automatically, with its height.' }
 };
 const Ann = { on: false, tool: null, color: '#ffd23b', picks: [], drag: null, raf: 0, exporting: null, sel: null, hover: null, hits: [], edit: null, cursor: null };
+const ANN_SHOW = [];   // run when the palette opens
 const annView = $('#annView');
 const FADE = 0.35;
 const ANN_TEAM_TYPES = new Set(['offside', 'backline']);
@@ -440,6 +441,8 @@ function paintAnnotations() {
   const t = video.currentTime, any = Ann.on || annActive(t).length;
   annView.classList.toggle('hidden', !any);
   if (!any) return;
+  // palette open but tracking mode on and no tool chosen: the clicks belong to the tracking layer underneath
+  annView.classList.toggle('live', Ann.on && !(typeof TR !== 'undefined' && TR.on && !Ann.tool));
   annPlace();
   const ctx = annView.getContext('2d'), W = annView.width, H = annView.height; ctx.clearRect(0, 0, W, H);
   Ann.hits = [];
@@ -470,7 +473,7 @@ function annSetTool(tool) {
   $$('#annBar [data-ann]').forEach(b => b.classList.toggle('on', b.dataset.ann === Ann.tool));
   $('#annDone').classList.toggle('hidden', Ann.tool !== 'chain');
   annView.classList.toggle('edit', !!Ann.tool);
-  $('#annHint').textContent = Ann.tool ? ANN_TYPES[Ann.tool].hint : 'Choose what to add, then click the players on the video (or in the 3D view). Click an annotation to select it: colour, longer / shorter, delete – drag a zone or its corners.';
+  $('#annHint').textContent = Ann.tool ? ANN_TYPES[Ann.tool].hint : 'Choose what to add, then click the players on the video (or in the 3D view) – or say / type it: “spotlight 9”, “distance 9 and 4”, “offside line away”. Click an annotation to select it: colour, longer / shorter, delete – drag a zone or its corners.';
   if (Ann.tool && hasVideo()) video.pause();
   paintAnnotations(); if (typeof V3 !== 'undefined') V3.dirty = true;
 }
@@ -480,6 +483,7 @@ function annOpen() {
   if (typeof Draw !== 'undefined' && Draw.editing) Draw.close();
   Ann.on = true; $('#annBar').classList.remove('hidden'); $('#annInfo').classList.remove('hidden'); $('#btnAnn').classList.add('on'); annView.classList.add('live');
   annSetTool(null); annCount(); paintAnnotations(); annKick();
+  ANN_SHOW.forEach(f => f());
 }
 function annClose() { Ann.on = false; Ann.tool = null; Ann.picks = []; Ann.drag = null; Ann.hover = null; annSelect(null); $('#annBar').classList.add('hidden'); $('#annInfo').classList.add('hidden'); $('#annPop').classList.add('hidden'); $('#btnAnn').classList.remove('on'); annView.classList.remove('edit', 'live'); paintAnnotations(); }
 function annCount() { $('#annN').textContent = (TR.anns || []).length; }
@@ -691,6 +695,8 @@ function annListPop() {
   const br = $('#annBar').getBoundingClientRect();
   pop.style.left = Math.round(br.right + 8) + 'px'; pop.style.top = Math.round(Math.max(8, Math.min(br.top, window.innerHeight - 320))) + 'px';
   pop.classList.remove('hidden');
+  // the palette was moved to the right: the list opens on its left side
+  const pw = pop.getBoundingClientRect().width; if (br.right + 8 + pw > window.innerWidth - 4) pop.style.left = Math.round(Math.max(4, br.left - 8 - pw)) + 'px';
   const find = id => (TR.anns || []).find(a => a.id === id);
   pop.querySelectorAll('[data-ajump]').forEach(b => b.onclick = () => { const a = find(b.dataset.ajump); if (a) { video.pause(); video.currentTime = Math.min(a.t1, a.t0 + 0.6); annSelect(a.id); } });
   const len = (id, d) => { const a = find(id); if (!a) return; checkpoint(); a.t1 = Math.max(a.t0 + 0.5, Math.round((a.t1 + d) * 1000) / 1000); annChanged(); pop.classList.add('hidden'); annListPop(); };
@@ -704,6 +710,7 @@ function annListPop() {
 // them over the original video – no slow frame-by-frame seeking in the player.
 async function annExport() {
   if (!api.v3dBegin) { toast('Saving the video works in the installed desktop app', 'bad'); return; }
+  if (Ann.exporting || (typeof PL !== 'undefined' && PL.job) || (typeof V3 !== 'undefined' && V3.exporting)) { toast('Another video is being saved – wait until it is finished', 'bad', 3000); return; }
   const anns = TR.anns || [];
   let t0, t1;
   if (clipIO.in != null && clipIO.out != null && clipIO.out > clipIO.in) { t0 = clipIO.in; t1 = clipIO.out; }
@@ -753,6 +760,135 @@ async function annRender(t0, t1, opt) {
   return res;
 }
 
+/* ---------------------------------------------------------------- annotations of tracks that change (3.3) */
+// annotations that follow players whose track was deleted are removed with it (undo brings both back); returns how many
+function annPrune() {
+  if (!(TR.anns || []).length) return 0;
+  const ids = new Set(TR.tracks.map(tk => tk.id)), n0 = TR.anns.length;
+  TR.anns = TR.anns.filter(a => ANN_TEAM_TYPES.has(a.type) || a.type === 'zone' || (a.tracks || []).every(id => ids.has(id)));
+  const n = n0 - TR.anns.length;
+  if (n) { if (Ann.sel && !annById(Ann.sel)) Ann.sel = null; annCount(); annSelBar(); paintAnnotations(); if (typeof V3 !== 'undefined') V3.dirty = true; }
+  return n;
+}
+const annPruneNote = n => n ? ` · ${n} annotation${n > 1 ? 's' : ''} of removed tracks removed too` : '';
+// a track joined into another one, or split at t: the annotations follow the player
+function annRetarget(fromId, toId, fromT = -Infinity) {
+  (TR.anns || []).forEach(a => { if (a.t0 >= fromT - 0.01 && (a.tracks || []).includes(fromId)) a.tracks = a.tracks.map(id => id === fromId ? toId : id); });
+}
+
+/* ---------------------------------------------------------------- voice and typed commands (3.3) */
+// "spotlight nine", "spotlight away ten", "name tag seven", "run arrow eleven", "distance nine and four",
+// "offside line away", "back line home", "next annotation", "previous annotation", "delete annotation"
+const ANN_SAY = [
+  { re: /^(?:spotlight|spot light|highlight)\s+(.+)$/, type: 'spot' },
+  { re: /^(?:name tag|nametag)\s+(.+)$/, type: 'label' },
+  { re: /^run(?: arrow)?\s+(.+)$/, type: 'run' },
+  { re: /^distance(?: between)?\s+(.+?)\s+(?:and|to|with)\s+(.+)$/, type: 'link' },
+  { re: /^offside line\s+(.+)$/, type: 'offside' },
+  { re: /^(?:back line|backline|defensive line|back four)\s+(.+)$/, type: 'backline' }
+];
+const annNorm = s => String(s || '').toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+// "home …", "away …", "opposition …" or a team's own name in front of the words → [team, rest]
+function annTeamPrefix(s) {
+  const pre = [['home', 'Home'], ['us', 'Home'], ['away', 'Away'], ['opposition', 'Away'], ['them', 'Away'], ['opponents', 'Away'],
+    [annNorm(teamName('Home')), 'Home'], [annNorm(teamName('Away')), 'Away']].filter(x => x[0]).sort((a, b) => b[0].length - a[0].length);
+  for (const [w, team] of pre) { if (s === w) return [team, '']; if (s.startsWith(w + ' ')) return [team, s.slice(w.length + 1).trim()]; }
+  return [null, s];
+}
+// a tracked player from spoken words: "nine", "away ten", "home number four", "this" (the selected track)
+function annTrackFromText(text, t = video.currentTime) {
+  const here = tk => !!(tk && tk.kind !== 'ball' && trackDrawn(tk) && annPos(tk, t));
+  const s0 = annNorm(text);
+  if (/^(this|that|selected|him|this one|this player|the selected player)$/.test(s0)) { const tk = selTrack(); return here(tk) ? { tk } : { err: 'Select a player first (Track tab, or click one in tracking mode)' }; }
+  const [team, s] = annTeamPrefix(s0);
+  if (!s) return { err: 'Say which player, e.g. “spotlight nine”' };
+  const teams = team ? [team] : ['Home', 'Away'];
+  let named = null;
+  for (const tm of teams) {   // a squad player of that team with a track at this moment
+    const p = playerFromText(s, tm); if (!p || p.team !== tm) continue;
+    named = named || p;
+    const tk = TR.tracks.find(k => k.playerId === p.id && here(k)); if (tk) return { tk };
+  }
+  // tracks without a squad player: by their label ("Home 9", "H9") or shirt number
+  const num = wordsToNum(s);
+  const byLabel = TR.tracks.filter(k => here(k) && (!team || k.team === team) && !k.playerId && (annNorm(trackLabel(k)) === s || (num && new RegExp('(^|\\D)' + num + '$').test(String(k.label || '')))));
+  if (byLabel.length === 1) return { tk: byLabel[0] };
+  if (byLabel.length > 1) return { err: `More than one track matches “${text}” – say the team (home / away)` };
+  return { err: named ? `${playerLabel(named)} has no track at ${fmtTime(t)}` : `No tracked player matches “${text}”` };
+}
+// returns null when the words are not an annotation command, otherwise { ok, msg }. at = when the words began
+function annCommand(text, at) {
+  const s = annNorm(text);
+  if (!s || !hasVideo()) return null;
+  const t = Number.isFinite(at) ? clamp(at, 0, video.duration || at) : video.currentTime;
+  const goTo = () => { video.pause(); if (Math.abs(video.currentTime - t) > 0.02) video.currentTime = t; };
+  if (/^(next|previous|last) annotation$/.test(s)) {
+    if (!(TR.anns || []).length) return { ok: false, msg: 'No annotations yet' };
+    if (!Ann.on) annOpen();
+    annStep(s.startsWith('next') ? 1 : -1); return { ok: true, msg: 'Annotation ' + (s.startsWith('next') ? 'forward' : 'back') };
+  }
+  if (Ann.on && /^(delete|remove) (the |this )?annotation$/.test(s)) {
+    if (!Ann.sel) return { ok: false, msg: 'No annotation selected' };
+    annDelete(Ann.sel); return { ok: true, msg: 'Annotation deleted' };
+  }
+  let hit = null;
+  for (const c of ANN_SAY) { const m = c.re.exec(s); if (m) { hit = { c, m }; break; } }
+  if (!hit) return null;
+  // with the palette closed, words that are a code in your code window keep tagging ("run nine" can be a tag)
+  if (!Ann.on) { const first = s.split(' ')[0]; if (VOC.codes.some(k => k.words && k.words[0] === first)) return null; }
+  const type = hit.c.type, T = ANN_TYPES[type];
+  if (ANN_TEAM_TYPES.has(type)) {
+    const [team] = annTeamPrefix(hit.m[1]);
+    if (!team) return { ok: false, msg: `Say which team: “${T.name.toLowerCase()} home” or “… away”` };
+    if (type === 'offside' && !TR.cals.some(c => c.type !== 'none')) return { ok: false, msg: 'The offside line needs the pitch calibration' };
+    if (!Ann.on) annOpen();
+    goTo();
+    const a = annAdd({ type, tracks: [], team, text: '' });
+    return { ok: true, msg: `${T.icon} ${annName(a)}` };
+  }
+  const picks = (type === 'link' ? [hit.m[1], hit.m[2]] : [hit.m[1]]).map(w => annTrackFromText(w, t));
+  const bad = picks.find(x => x.err); if (bad) return { ok: false, msg: bad.err };
+  if (type === 'link' && picks[0].tk === picks[1].tk) return { ok: false, msg: 'Two different players, please' };
+  if (!Ann.on) annOpen();
+  goTo();
+  const a = annAdd({ type, tracks: picks.map(x => x.tk.id), text: '' });
+  annSelect(a.id);
+  return { ok: true, msg: `${T.icon} ${T.name}: ${annName(a)}` };
+}
+const ANN_GRAMMAR = ['spotlight', 'highlight', 'name', 'tag', 'run', 'arrow', 'distance', 'between', 'and', 'to', 'offside', 'line', 'back', 'four', 'defensive',
+  'home', 'away', 'opposition', 'next', 'previous', 'last', 'annotation', 'delete', 'remove', 'this', 'that', 'selected'];
+
+/* ---------------------------------------------------------------- annotation layers for the clip / playlist export (3.3) */
+// the part of s–e in which any annotation is visible, or null
+function annSpan(s, e) {
+  const on = (TR.anns || []).filter(a => a.t1 > s + 0.02 && a.t0 < e - 0.02);
+  if (!on.length) return null;
+  return [Math.max(s, Math.min(...on.map(a => a.t0))), Math.min(e, Math.max(...on.map(a => a.t1)))];
+}
+// draws the annotations from t0 to t1 frame by frame on a transparent picture → a temp video layer the export lays over
+// the clip ({ path, t0, t1 }); null when cancelled
+async function annOverlayFile(t0, t1, w, h, onFrame, job) {
+  const fps = clamp(Math.round(1 / frameDur()), 10, 60), n = Math.max(1, Math.round((t1 - t0) * fps));
+  const b = await api.v3dBegin({ overlay: true, fps, w, h });
+  if (!b || !b.ok) throw new Error((b && b.error) || 'the annotation layer could not be started');
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const ctx = c.getContext('2d'), was = Ann.exporting;
+  Ann.exporting = job || { cancel: false };
+  try {
+    for (let k = 0; k < n; k++) {
+      if (job && job.cancel) { await api.v3dEnd({ cancel: true }); return null; }
+      ctx.clearRect(0, 0, w, h);
+      drawAnnotations(ctx, w, h, t0 + k / fps);
+      const blob = await new Promise(rs => c.toBlob(rs, 'image/png'));
+      if (!(await api.v3dFrame(new Uint8Array(await blob.arrayBuffer())))) break;
+      if (onFrame && (k % 3 === 0 || k === n - 1)) onFrame(k + 1, n);
+    }
+  } catch (e) { await api.v3dEnd({ cancel: true }); throw e; } finally { Ann.exporting = was; }
+  const r = await api.v3dEnd({});
+  if (!r || !r.ok) throw new Error((r && r.error) || 'the annotation layer failed');
+  return { path: r.file, t0, t1: t0 + n / fps };
+}
+
 /* ---------------------------------------------------------------- the palette can be moved by its title */
 (function annPaletteDrag() {
   const bar = $('#annBar'), title = bar.querySelector('.atitle'); let d = null;
@@ -763,6 +899,9 @@ async function annRender(t0, t1, opt) {
   window.addEventListener('mousemove', e => { if (d) place(e.clientX - d.wl - d.dx, e.clientY - d.wt - d.dy); });
   window.addEventListener('mouseup', () => { if (!d) return; d = null; try { localStorage.setItem('tq_annbar', JSON.stringify([parseFloat(bar.style.left), parseFloat(bar.style.top)])); } catch (e) { /* ignore */ } });
   title.addEventListener('dblclick', () => { bar.style.left = ''; bar.style.top = ''; bar.style.transform = ''; try { localStorage.removeItem('tq_annbar'); } catch (e) { /* ignore */ } });
+  // a smaller window (or the side panel opening) must not leave the palette outside the video
+  window.addEventListener('resize', () => { if (bar.style.left && !bar.classList.contains('hidden')) place(parseFloat(bar.style.left), parseFloat(bar.style.top)); });
+  ANN_SHOW.push(() => { if (bar.style.left) requestAnimationFrame(() => place(parseFloat(bar.style.left), parseFloat(bar.style.top))); });
 })();
 
 /* ---------------------------------------------------------------- wiring */

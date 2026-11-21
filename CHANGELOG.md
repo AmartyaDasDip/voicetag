@@ -1,5 +1,58 @@
 # TACTIQ ANALYST – changelog
 
+## 3.3.0 – annotations in the playlist export, said / typed annotations, Electron 44
+
+### New: ✨ annotations in the playlist export
+- Playlist tab → Export video → **✨ Annotations**: the annotations are drawn into the highlight video, the separate
+  clips and the one-folder-per-player export, under the captions and together with the freeze-frame drawings.
+- How: the app first asks where to save, then draws the annotations of each clip frame by frame on a transparent
+  layer (progress bar “Drawing the annotations”), then ffmpeg lays that layer over the cut clip. Only the part of a
+  clip in which annotations are visible is drawn, so clips without annotations cost nothing extra. A freeze frame
+  shows the annotations of its moment.
+- The temporary layers are deleted after the export, when it is cancelled and when the app closes; the export only
+  accepts layers the app made itself in this session.
+- Not with “Fast (approx. cuts, no extras)”, like the other extras.
+
+### New: say or type annotations
+With the ✨ palette open (or, for words that are not one of your codes, also with it closed):
+“spotlight nine”, “spotlight away ten”, “name tag seven”, “run arrow eleven”, “distance nine and four”,
+“offside line away” / “offside line England” (team name), “back line home”, “next annotation”,
+“previous annotation”, “delete annotation”, “spotlight this” (the selected track).
+- Players are found by the squad number given to their track; a number in both teams prefers the one with a track
+  at that moment.
+- Said while the video plays, the annotation starts at the moment you began speaking (with the voice offset).
+- The words are added to the voice grammar; ordinary tagging is unchanged.
+
+### Fixes
+- **Tracking with the annotation palette open**: clicks on the video were caught by the annotation layer, so no
+  tracking point could be set. Now, in tracking mode with no annotation tool chosen, the clicks go to the tracking
+  layer; choose a tool to annotate.
+- **Palette outside the video**: after the window got smaller a moved palette could sit outside the video (and
+  out of reach). It is now kept inside on every resize and when it opens; the 📋 list opens on the left of the
+  palette when there is no room on its right.
+- **Draw (freeze-frame drawing) and the annotation palette** were both usable at once and fought over the clicks –
+  opening one now closes the other.
+- **Annotations of changed tracks**: joining two tracks now keeps their annotations on the joined track; splitting
+  a track moves the annotations from the split onwards to the new part; deleting a track, clearing the AI tracks or
+  re-importing an AI result over them removes their (now invisible) annotations too, with a note – Ctrl+Z brings
+  everything back.
+- **Two videos saved at once** (a playlist export, the 🎬 annotated MP4 and a 3D replay MP4 share the frame
+  pipeline): starting a second one while the first runs could break the first. It is now refused with a note.
+
+### Updates
+- **Electron 38 → 44.11.5** (Chromium and Node security updates; Electron 38 is out of support). Checked: voice
+  (vosk WebAssembly, needs `unsafe-eval`), WebGL 3D, ffmpeg, the AI engine (onnxruntime 1.23.2 in a utility
+  process), file dialogs, clipboard (the app only uses `navigator.clipboard`).
+- Thorough check before the release: the whole end-to-end suite (14 tests) on Electron 38 and 44, static checks
+  (no undefined names, no duplicate globals, IPC and preload wiring), drawing cost (12 long annotations ≈ 1.5 ms a
+  1080p frame), 3D memory after many annotation changes (stable), 3D view idle when nothing moves (0 frames/s).
+
+### Tests
+- New end-to-end test `t14` (29 checks): typed annotation commands, tracking clicks with the palette open, palette
+  after a resize, Draw ↔ palette, playlist export with and without annotations compared pixel by pixel, separate
+  clips, cancelled save dialog, temp files removed.
+- The Windows smoke test also exports one playlist clip with and without annotations and compares them.
+
 ## 3.2.0 – better-looking, interactive annotations; offside line and back line
 
 ### 3D annotations, rebuilt (new `renderer/annotate3d.js`)

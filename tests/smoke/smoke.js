@@ -184,7 +184,7 @@ const step = async (name, fn) => { const t = Date.now(); try { await fn(); } cat
       const t0 = tk.points[0].t;
       // a simple pitch calibration, so the annotations have pitch positions (3D)
       if (!TR.cals.some(c => c.type !== 'none')) { const img = [[0.1, 0.3], [0.9, 0.3], [0.95, 0.95], [0.05, 0.95]], pit = [[20, 10], [85, 10], [85, 60], [20, 60]]; TR.cals.push({ id: 'smk', t: 0, type: 'hom', points: img.map((q, i) => ({ img: q, pitch: pit[i] })), H: solveHomography(img, pit) }); dataChanged(); }
-      TR.anns = [{ id: 'sm1', type: 'spot', tracks: [tk.id], t0, t1: t0 + 2, color: '#ffd23b', text: 'Smoke' }, { id: 'sm2', type: 'zone', tracks: [], zone: [40, 20, 60, 40], t0, t1: t0 + 2, color: '#ff4757', text: 'Zone' }]; video.pause(); video.currentTime = t0 + 0.5; return t0; });
+      TR.anns = [{ id: 'sm1', type: 'spot', tracks: [tk.id], t0, t1: t0 + 2, color: '#ff4fd8', text: 'Smoke' }, { id: 'sm2', type: 'zone', tracks: [], zone: [40, 20, 60, 40], t0, t1: t0 + 2, color: '#ff4757', text: 'Zone' }]; video.pause(); video.currentTime = t0 + 0.5; return t0; });
     await h.wait(900);
     check('annotation drawn on the video', a != null && await h.ev(() => !document.querySelector('#annView').classList.contains('hidden') && annActive(video.currentTime).length === 2));
     await h.shot('04-annotations');
@@ -199,6 +199,24 @@ const step = async (name, fn) => { const t = Date.now(); try { await fn(); } cat
       const n3 = await h.ev(() => typeof A3 !== 'undefined' ? [...A3.objs.values()].filter(o => o.g.visible).length : -1);
       check('annotations drawn in 3D', n3 >= 1, n3); await h.shot('05-annotations-3d');
       await page.click('#p3close');
+      // 3.3: the annotations drawn into the playlist export (a transparent layer ffmpeg lays over the clip)
+      const clip = await h.ev(() => { const e = events.slice().sort((x, y) => x.t - y.t)[0]; PL.excluded = new Set(events.filter(x => x !== e).map(x => x.id)); return { s: e.start, e: e.end }; });
+      await page.click('[data-tab=playlist]'); await h.wait(500);
+      await h.ev(() => { ['#plTitle', '#plCaption', '#plDraw'].forEach(s => { document.querySelector(s).checked = false; }); document.querySelector('#plAnn').checked = true; });
+      const exp = async (file, ann) => {
+        await h.ev(v => { document.querySelector('#plAnn').checked = v; }, ann); await h.save(file); await page.click('#plExportOne');
+        await h.waitFor(() => document.querySelector('#plProgress').classList.contains('hidden') && !document.querySelector('#plExportOne').disabled, 300000);
+        return fs.existsSync(file) ? probe(file) : 0;
+      };
+      const fa = path.join(OUT, 'clip-annotated.mp4'), fb = path.join(OUT, 'clip-plain.mp4');
+      const da = await exp(fa, true), db = await exp(fb, false);
+      const at = a + 0.5 - clip.s;
+      const px = f => execFileSync(FF, ['-hide_banner', '-loglevel', 'error', '-ss', at.toFixed(2), '-i', f, '-frames:v', '1', '-vf', 'scale=320:180', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1 << 24 });
+      let changed = 0;
+      if (da && db) { const A = px(fa), B = px(fb); for (let i = 0; i < Math.min(A.length, B.length); i += 3) if (Math.abs(A[i] - B[i]) + Math.abs(A[i + 1] - B[i + 1]) + Math.abs(A[i + 2] - B[i + 2]) > 60) changed++; }
+      check('playlist export with the annotations drawn in', da > 1 && Math.abs(da - db) < 0.2 && changed > 120, JSON.stringify({ da, db, clip, at: +at.toFixed(2), changed }));
+      check('no temporary annotation layers left', !fs.readdirSync(os.tmpdir()).some(x => /^tactiq-ann-/.test(x)));
+      await h.ev(() => { PL.excluded = new Set(); renderPlaylist(); });
     }
   });
   await step('memory', async () => {

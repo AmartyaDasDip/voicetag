@@ -72,6 +72,7 @@ const Draw = {
     const tg = currentTarget();
     if (!tg || tg.kind !== 'event') { toast('Select (or create) the tag this drawing belongs to first', 'bad', 3000); return; }
     this.hideShow();
+    if (typeof Ann !== 'undefined' && Ann.on) annClose();   // one drawing layer at a time
     video.pause();
     this.editing = true; this.shapes = [];
     this.place(); this.paint();

@@ -465,6 +465,7 @@ function setTracking(on) {
   TR.on = on;
   if (on) { video.pause(); if (!TR.tracks.length) toast('Tracking mode: add players / ball in the Track tab', 'info', 3000); }
   paintTracking(true); renderTrackTab(); renderTrackBar();
+  if (typeof paintAnnotations === 'function') paintAnnotations();   // the annotation layer lets the tracking clicks through
 }
 
 /* ---------------------------------------------------------------- TRACK TAB */
@@ -550,7 +551,7 @@ function renderTrackTab() {
   b('#tkNoCal', () => { if (!hasVideo()) return; checkpoint(); TR.cals.push({ id: uid(), t: Math.round(video.currentTime * 100) / 100, type: 'none', points: [], H: null }); markDirty(); autosave(); renderTrackTab(); paintTracking(true); toast('From here on: no pitch calibration (positions are kept on the video only)', 'info', 3500); });
   b('#tkCsv', exportTrackingCsv); b('#tkJson', exportTrackingJson);
   el.querySelectorAll('[data-tk]').forEach(x => x.onclick = ev => { if (ev.target.closest('button')) return; TR.sel = x.dataset.tk; renderTrackTab(); paintTracking(true); });
-  el.querySelectorAll('[data-tkdel]').forEach(x => x.onclick = () => { const k = TR.tracks.find(q => q.id === x.dataset.tkdel); if (k && confirm('Delete the track "' + trackLabel(k) + '" with ' + k.points.length + ' points?')) { checkpoint(); TR.tracks = TR.tracks.filter(q => q !== k); if (TR.sel === k.id) TR.sel = null; autosave(); renderTrackTab(); paintTracking(true); } });
+  el.querySelectorAll('[data-tkdel]').forEach(x => x.onclick = () => { const k = TR.tracks.find(q => q.id === x.dataset.tkdel); if (k && confirm('Delete the track "' + trackLabel(k) + '" with ' + k.points.length + ' points?')) { checkpoint(); TR.tracks = TR.tracks.filter(q => q !== k); if (TR.sel === k.id) TR.sel = null; const pr = typeof annPrune === 'function' ? annPrune() : 0; if (pr) toast('Track deleted' + annPruneNote(pr), 'info', 3500); autosave(); renderTrackTab(); paintTracking(true); } });
   el.querySelectorAll('[data-tkedit]').forEach(x => x.onclick = () => editTrack(x.dataset.tkedit));
   el.querySelectorAll('[data-caledit]').forEach(x => x.onclick = () => { const c = TR.cals.find(q => q.id === x.dataset.caledit); if (c && c.type !== 'none') { video.currentTime = c.t + 0.001; setTimeout(() => openCalibration(c), 250); } });
   el.querySelectorAll('[data-caldel]').forEach(x => x.onclick = () => { if (!confirm('Delete this calibration?')) return; checkpoint(); TR.cals = TR.cals.filter(q => q.id !== x.dataset.caldel); markDirty(); autosave(); renderTrackTab(); paintTracking(true); });
