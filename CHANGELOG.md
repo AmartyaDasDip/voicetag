@@ -1,5 +1,60 @@
 # TACTIQ ANALYST – changelog
 
+## 3.1.0 – who is who on the pitch, animated annotations
+
+After the feedback on the 3D tracking video (a linesman counted as a player, the referee drawn like a player,
+players missing): the pitch comes first, and only the people inside it become players.
+
+### Pitch first, then tracking
+- The Track tab shows **Step 1 – the pitch** until the camera view is calibrated. The 🤖 start window and the result
+  window say so too, with **📐 Calibrate the pitch now**; after calibrating, **↺ Re-import last run** sorts the same
+  analysis again without running the AI again.
+
+### Who is who (new `renderer/roles.js`)
+Every AI track is placed on the calibrated pitch (with a margin that grows with the distance from the camera) and sorted:
+- **Players** – a team kit, inside the pitch. Kits are compared by their hue, so shade and floodlights no longer turn a
+  white shirt into "other" (players in shade were missing before), and a blue-grey or dark kit no longer becomes a red
+  player just because red was the nearer of the two teams.
+- **Goalkeepers** – a third kit that stays in or near one penalty area (one per goal) → a player of the team defending
+  that goal, label GK.
+- **Referee** – neither team kit, moving freely inside the pitch → drawn as a black **REF** marker (video, 2D, 3D),
+  never as a player and never counted as one.
+- **Assistant referees** – stay on one touchline (one per touchline, preferring the referee's kit) → left out.
+- **Outside the pitch** – coaches, substitutes, ball boys, cameramen → left out.
+- Option to keep the officials and staff as hidden tracks; Track tab ticks **referee** and **officials & others**.
+- **🧭 Who is who** sorts AI tracks already in a project (older versions, or calibrated later); tracks you identified
+  or typed by hand are left alone; Ctrl+Z undoes it. The track editor has the types *Referee*, *Assistant referee*
+  and *Other person (not drawn)*.
+- Checked on both Spain v England test clips: every person sorted correctly (players, goalkeeper, referee, both
+  assistant referees, 2–4 people outside the pitch).
+
+### AI engine
+- Weak detections (from 12 % confidence) may continue an existing track: half-hidden players and players in odd poses
+  are kept – about one more player found per frame with both models. New tracks still need a confident detection.
+
+### ✨ Animated annotations (new `renderer/annotate.js`)
+- ✨ under the video: **🔦 Spotlight**, **🏷 Tag**, **➜ Run**, **↔ Distance** (live metres), **〰 Line** through a unit
+  (with gaps in metres, optional shaded area) and **▭ Zone** (stored in pitch metres). They follow the tracked players
+  and, with a calibration, are drawn in perspective and stay on the grass while the camera pans.
+- Fade in, draw themselves and fade out while playing; complete while paused; colour and duration (2–10 s or to clip
+  OUT); list with jump / longer / shorter / delete; undo; saved with the project.
+- Shown on the video, on the 2D pitch, in the 3D view (spotlight beams, distances, lines, zones – also in 3D replays and
+  their MP4) and in screenshots.
+- **🎬 MP4 with the annotations burnt in**: frames are drawn exactly from the tracking data on a transparent picture
+  and ffmpeg lays them over the original video (with sound) – a 4-second clip takes about 6 s.
+
+### Fixes found on the way
+- Heat maps and samples no longer include "other" people (staff, unknown).
+- The 2D and 3D "placed" counts are players only (the referee was counted).
+- 🔗 Auto-link and the continuation suggestions never join people outside the pitch to players.
+- The 3D library bundle now also has the curve, cone and blending parts the annotations need.
+
+### Tests
+- New end-to-end test (38 checks): pitch-first prompts, who is who on a real AI run, hidden officials, type changes
+  with undo, six annotations made by clicking, video / 2D / 3D drawing, list, undo, saving, MP4 export with frame
+  check, 🧭 Who is who on a 3.0 project. Windows smoke test: AI import, an annotation and an annotated MP4.
+- Third tutorial video: *Who is who · animated annotations*.
+
 ## 3.0.0 – roadmap phase 1.0: production release
 
 The last phase of the blueprint: stable for full matches, safe against crashes, tested on Windows in every build,

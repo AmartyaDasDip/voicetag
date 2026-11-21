@@ -182,7 +182,7 @@ function projectObject() {
     project: { info: typeof project !== 'undefined' ? project.info : {} },
     video: { path: videoInfo.path, name: videoInfo.name, size: videoInfo.size, meta: videoMeta },
     match, config, events, nextId, curTeam,
-    tracking: typeof TR !== 'undefined' ? { tracks: TR.tracks, cals: TR.cals, settings: TR.settings, log: TR.log || [], camera: TR.camera || [], shots: TR.shots || [], cuts: TR.cuts || [] } : null,
+    tracking: typeof TR !== 'undefined' ? { tracks: TR.tracks, cals: TR.cals, settings: TR.settings, log: TR.log || [], camera: TR.camera || [], shots: TR.shots || [], cuts: TR.cuts || [], anns: TR.anns || [] } : null,
     clips: typeof clips !== 'undefined' ? clips : [] };
 }
 $('#btnSaveProj').onclick = async () => {
@@ -213,7 +213,7 @@ async function openProjectDataInner(p, path, evs, m) {
   target = { kind: null, id: null, seq: 0 };
   live.on = false; live.running = false;
   curTeam = p.curTeam || 'Home';
-  if (typeof TR !== 'undefined') { TR.tracks = (p.tracking && p.tracking.tracks) || []; TR.cals = (p.tracking && p.tracking.cals) || []; TR.log = (p.tracking && p.tracking.log) || []; TR.camera = (p.tracking && p.tracking.camera) || []; TR.shots = (p.tracking && p.tracking.shots) || []; TR.cuts = (p.tracking && p.tracking.cuts) || []; if (p.tracking && p.tracking.settings) Object.assign(TR.settings, p.tracking.settings); TR.sel = null; }
+  if (typeof TR !== 'undefined') { TR.tracks = (p.tracking && p.tracking.tracks) || []; TR.cals = (p.tracking && p.tracking.cals) || []; TR.log = (p.tracking && p.tracking.log) || []; TR.camera = (p.tracking && p.tracking.camera) || []; TR.shots = (p.tracking && p.tracking.shots) || []; TR.cuts = (p.tracking && p.tracking.cuts) || []; TR.anns = (p.tracking && p.tracking.anns) || []; if (p.tracking && p.tracking.settings) Object.assign(TR.settings, p.tracking.settings); TR.sel = null; }
   if (typeof clips !== 'undefined') clips = p.clips || [];
   let loaded = false;
   if (p.video && p.video.path && api.isDesktop) {

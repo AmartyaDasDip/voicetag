@@ -174,6 +174,23 @@ const step = async (name, fn) => { const t = Date.now(); try { await fn(); } cat
     check('3D replay saved as MP4', Math.abs(d - 2.03) < 0.15, d + ' s');
     await page.click('#p3close');
   });
+  await step('annotations', async () => {
+    // 3.1: AI result imported (who is who), an annotation that follows a player, burnt into an MP4 by ffmpeg
+    // the test video has no real players: the import must work anyway, then a hand-made track is annotated
+    const n = await h.ev(() => { if (!AI.last) return -1; aiImport(AI.last.result, { A: 'Home', B: 'Away', other: 'Neutral', min: 0.5, ball: true, keepOff: false, replace: true }); return TR.tracks.filter(t => t.kind === 'player').length; });
+    check('AI result imported (who is who)', n >= 0, n);
+    const a = await h.ev(() => { let tk = TR.tracks.find(t => t.kind === 'player' && t.points.length > 3);
+      if (!tk) { tk = newTrack({ team: 'Home', label: 'H1' }); for (let k = 0; k <= 12; k++) tk.points.push({ t: 1 + k * 0.25, x: 0.3 + k * 0.03, y: 0.6, src: 'manual', vis: 'v' }); }
+      const t0 = tk.points[0].t;
+      TR.anns = [{ id: 'sm1', type: 'spot', tracks: [tk.id], t0, t1: t0 + 2, color: '#ffd23b', text: 'Smoke' }, { id: 'sm2', type: 'zone', tracks: [], img: [0.2, 0.3, 0.5, 0.6], t0, t1: t0 + 2, color: '#ff4757', text: 'Zone' }]; video.pause(); video.currentTime = t0 + 0.5; return t0; });
+    await h.wait(900);
+    check('annotation drawn on the video', a != null && await h.ev(() => !document.querySelector('#annView').classList.contains('hidden') && annActive(video.currentTime).length === 2));
+    await h.shot('04-annotations');
+    const f = path.join(OUT, 'annotated.mp4'); await h.save(f);
+    const r = a == null ? null : await h.ev(t0 => annRender(t0, t0 + 1.5, { tags: true, sound: true, size: 720 }).then(x => x && { ok: x.ok, error: x.error }), a);
+    const d = fs.existsSync(f) ? probe(f) : 0;
+    check('video with annotations saved as MP4', r && r.ok && Math.abs(d - 1.5) < 0.2, JSON.stringify(r) + ' ' + d + ' s');
+  });
   await step('memory', async () => {
     const mb = await h.app.evaluate(({ app }) => Math.round(app.getAppMetrics().reduce((s, p) => s + p.memory.workingSetSize, 0) / 1024));
     note('memory (all processes)', mb + ' MB'); check('memory use fits an 8 GB PC', mb < 2500, mb + ' MB');

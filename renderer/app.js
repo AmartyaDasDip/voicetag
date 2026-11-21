@@ -74,7 +74,7 @@ const History = {
   past: [], future: [], max: 60,
   snap() {
     const T = typeof TR !== 'undefined';
-    return { light: JSON.stringify({ events, nextId, match, open, curTeam, cals: T ? TR.cals : [], trlog: T ? TR.log || [] : [], shots: T ? TR.shots || [] : [], cuts: T ? TR.cuts || [] : [], clips: typeof clips !== 'undefined' ? clips : [] }),
+    return { light: JSON.stringify({ events, nextId, match, open, curTeam, cals: T ? TR.cals : [], trlog: T ? TR.log || [] : [], shots: T ? TR.shots || [] : [], cuts: T ? TR.cuts || [] : [], anns: T ? TR.anns || [] : [], clips: typeof clips !== 'undefined' ? clips : [] }),
       tracks: T ? TR.tracks.map(tk => TrackJson.json(tk)) : [], camera: CamJson.get() };
   },
   checkpoint() { this.past.push(this.snap()); if (this.past.length > this.max) this.past.shift(); this.future = []; markDirty(); },
@@ -85,7 +85,7 @@ const History = {
       // tracks whose text is unchanged keep their current object (no re-parsing of a million points)
       const cur = new Map(); TR.tracks.forEach(tk => cur.set(TrackJson.json(tk), tk));
       TR.tracks = sn.tracks.map(j => cur.get(j) || TrackJson.parse(j));
-      TR.cals = o.cals || []; TR.log = o.trlog || []; TR.shots = o.shots || TR.shots || []; TR.cuts = o.cuts || TR.cuts || [];
+      TR.cals = o.cals || []; TR.log = o.trlog || []; TR.shots = o.shots || TR.shots || []; TR.cuts = o.cuts || TR.cuts || []; TR.anns = o.anns || [];
       if (sn.camera !== CamJson.get()) TR.camera = JSON.parse(sn.camera);
     }
     if (typeof clips !== 'undefined') clips = o.clips || [];
@@ -201,7 +201,7 @@ async function setVideo(info, playPath, keepTags) {
   if (keepTags) { renderAll(); return; }   // live session or project: keep the tags already loaded
   sessionKey = 'vt_session_' + (info.path || info.name) + '_' + info.size;
   events = []; undoStack = []; nextId = 1; open = {}; target = { kind: null, id: null, seq: 0 }; match = EMPTY_MATCH(); History.clear();
-  if (typeof TR !== 'undefined') { TR.tracks = []; TR.cals = []; TR.log = []; TR.camera = []; TR.shots = []; TR.cuts = []; }
+  if (typeof TR !== 'undefined') { TR.tracks = []; TR.cals = []; TR.log = []; TR.camera = []; TR.shots = []; TR.cuts = []; TR.anns = []; }
   if (typeof clips !== 'undefined') clips = [];
   try {
     const saved = JSON.parse(localStorage.getItem(sessionKey) || 'null');
@@ -210,7 +210,7 @@ async function setVideo(info, playPath, keepTags) {
       events = saved.events; nextId = saved.nextId || (Math.max(0, ...events.map(e => e.id)) + 1);
       if (saved.match) match = Object.assign(EMPTY_MATCH(), saved.match);
       await sessionExtra(saved, sessionKey);
-      if (typeof TR !== 'undefined' && (saved.tracks || saved.cals)) { TR.tracks = saved.tracks || []; TR.cals = saved.cals || []; TR.log = saved.trlog || []; TR.camera = saved.camera || []; TR.shots = saved.shots || []; TR.cuts = saved.cuts || []; }
+      if (typeof TR !== 'undefined' && (saved.tracks || saved.cals)) { TR.tracks = saved.tracks || []; TR.cals = saved.cals || []; TR.log = saved.trlog || []; TR.camera = saved.camera || []; TR.shots = saved.shots || []; TR.cuts = saved.cuts || []; TR.anns = saved.anns || []; }
       if (saved.clips && typeof clips !== 'undefined') clips = saved.clips;
     }
   } catch (e) { /* ignore */ }
@@ -972,11 +972,14 @@ function renderHelp() {
     <li>Right-click or <kbd>Delete</kbd> removes a keyframe, drag a marker to move it, <kbd>Enter</kbd>/<kbd>Backspace</kbd> step without clicking.</li></ol>
     <p>🗺 2D shows the tracked players on the pitch with trails; 🧊 3D shows them on a 3D pitch (see below). Maps → Tracking heatmap / Average positions. Export → Tracking CSV/JSON.</p>
     <h3>🤖 AI tracking (Track tab)</h3>
-    <ol><li><b>🤖 Auto-detect players</b>: choose a range (from here for N seconds, the clip IN–OUT, or the whole video), the model (Fast for 8 GB PCs, Accurate for 16 GB) and how many frames to look at. It runs in the background – keep tagging.</li>
-    <li>When it finishes, say which kit colour is which team. Referees, keepers and staff go to “Other”.</li>
+    <ol><li><b>Step 1 – the pitch:</b> calibrate the camera view first (🎯 Calibrate at this frame; in TV footage one calibration per wide shot). The AI then tracks only the people <b>inside the pitch</b>.</li>
+    <li><b>🤖 Auto-detect players</b>: choose a range (from here for N seconds, the clip IN–OUT, or the whole video), the model (Fast for 8 GB PCs, Accurate for 16 GB) and how many frames to look at. It runs in the background – keep tagging.</li>
+    <li>When it finishes, say which kit colour is which team. <b>Who is who</b> is decided for you: players (team kit, inside the pitch), the <b>goalkeepers</b> (a third kit that stays in a penalty area – they become players of the team defending that goal), the <b>referee</b> (shown as a black REF marker, never as a player), the <b>assistant referees</b> on the touchlines and everybody <b>outside the pitch</b> (coaches, substitutes, ball boys, cameramen) – these are left out, or kept as hidden tracks if you tick that option.
+      Without a calibration this is not possible: the dialog says so – calibrate and press <b>↺ Re-import last run</b> (no need to analyse again).</li>
     <li>Check and fix: <b>⚠ Next unsure point</b> jumps to positions the AI was not sure about; click the right spot (tracking mode) to correct it.
-      <b>✂ Split selected here</b> when a track jumps to another player, <b>⇄ Join selected with…</b> when one player got two tracks, ✎ to say which squad player a track is.</li>
-    <li>Calibrate the pitch (above) to get metres, the 2D view and heat maps from AI tracks. With a calibration, people off the pitch can be dropped automatically.</li></ol>
+      <b>✂ Split selected here</b> when a track jumps to another player, <b>⇄ Join selected with…</b> when one player got two tracks, ✎ to say which squad player a track is, or to change its type (player, referee, assistant referee, other person).</li>
+    <li><b>🧭 Who is who</b> does the same sorting for AI tracks already in the project (e.g. imported with an older version, or after you calibrated later). Tracks you changed by hand are left alone. Ctrl+Z undoes it.</li>
+    <li>Track tab ticks: <b>referee</b> draws the referee on the video, 2D and 3D; <b>officials &amp; others</b> also draws the assistant referees, staff and unsure people (grey diamonds).</li></ol>
     <p class="small muted">Works best on the wide main / tactical camera. Close-ups and replays give poor results – analyse the wide-camera parts.</p>
     <h3>⚽ Ball tracking (Track tab)</h3>
     <ol><li>In 🤖 Auto-detect choose <b>Ball: zoom in for a second look</b> (best) – the AI looks at the whole picture, then zooms in where the ball should be. Spare balls by the touchline and logos are ignored.</li>
@@ -995,6 +998,13 @@ function renderHelp() {
     <li>Show or hide names, trails, the <b>team shape</b> (outline of the outfield players), the team’s <b>lines</b> (defence, midfield, attack) and <b>tags</b> (tags with a pitch location appear where they happened; a pass with an end point gets its line).</li>
     <li><b>🎬 Replay</b> plays a tag, the last N seconds or any from–to range in 3D, from any camera and at ¼× to 2× (Space = play/pause, Esc = back to the video), or saves it as an <b>MP4 video</b> (720p or 1080p) – in a project it goes to the clips folder. In the tag editor, <b>🧊 3D replay</b> does the same for that tag. 📷 saves a 1920 × 1080 picture.</li>
     <li>Faded players are estimated (between tracked points). Players that are not tracked, outside the picture or in close-ups are not shown. Heights, body turn and ball height are not measured – it is a visualisation, not a measurement. On an 8 GB PC choose quality <b>Light</b> if it is not smooth.</li></ol>
+    <h3>✨ Animated annotations</h3>
+    <ol><li><b>✨</b> (under the video) opens the annotation bar. Pause where it should start, choose what to add and click the players on the video – an annotation <b>follows the tracked players</b> and stays on the grass while the camera pans.</li>
+    <li><b>🔦 Spotlight</b> – a light on one player. <b>🏷 Tag</b> – a name tag above a player (type your own text). <b>➜ Run</b> – an arrow of the run the player makes in the next seconds. <b>↔ Distance</b> – a line between two players with their distance live in metres. <b>〰 Line</b> – connect several players (a back line, a press, a unit), Enter to finish, with or without the shaded area and the gaps in metres. <b>▭ Zone</b> – drag a space on the pitch and give it a name.</li>
+    <li>Choose the colour and how long it stays (2–10 s or to clip OUT). Paused, you see them complete; while the video plays they fade in, draw themselves and fade out. 📋 lists them: jump, make longer/shorter, delete. Ctrl+Z undoes. They are saved with the project.</li>
+    <li>They also appear on the <b>🗺 2D</b> pitch and in the <b>🧊 3D</b> view (spotlight beams, distances, lines, zones – also in a 3D replay and its MP4), and in 📷 screenshots.</li>
+    <li><b>🎬</b> in the bar saves the clip IN–OUT (or the time around your annotations) as an <b>MP4 with the annotations burnt in</b>, with sound, 720p or 1080p – optionally with all tracking markers.</li>
+    <li>Distances, runs and zones need a pitch calibration; without one, spotlights, tags and lines still follow the players on the video.</li></ol>
     <h3>📺 Broadcast / TV footage (Track tab)</h3>
     <ol><li><b>📺 Scan camera shots</b> finds every camera cut and sorts the shots: <b>wide</b> and <b>medium</b> (usable for 2D tracking), <b>close-up</b> and <b>other</b> (crowd, bench, graphics). About 1–3 minutes per 10 minutes of video.</li>
     <li>Mark <b>replays</b> in the shot list (a slow-motion replay from the main camera looks like a normal wide shot, so the app can’t always tell). If a cut was found by mistake, press <b>⤒ join</b>.</li>
@@ -1076,7 +1086,7 @@ function autosaveNow(flush) {
     if (!any) { localStorage.removeItem(key); if (api.recoveryClear && !projFile) api.recoveryClear(key); return; }
     const points = T ? TR.tracks.reduce((a, tk) => a + tk.points.length, 0) : 0;
     const light = JSON.stringify({ key, events, nextId, match, video: videoInfo, savedAt: new Date().toISOString(), projectFile: projFile,
-      projectName: projFile && project.info ? project.info.name : '', cals: T ? TR.cals : [], trlog: T ? TR.log || [] : [], shots: T ? TR.shots || [] : [], cuts: T ? TR.cuts || [] : [],
+      projectName: projFile && project.info ? project.info.name : '', cals: T ? TR.cals : [], trlog: T ? TR.log || [] : [], shots: T ? TR.shots || [] : [], cuts: T ? TR.cuts || [] : [], anns: T ? TR.anns || [] : [],
       clips: typeof clips !== 'undefined' ? clips : [], trackCount: T ? TR.tracks.length : 0, points });
     // quick sessions are also kept in the browser storage (dashboard: "Continue last session"); big tracking data only in the file
     if (!projFile) {
@@ -1178,6 +1188,7 @@ async function screenshot() {
   const ctx = c.getContext('2d'); ctx.drawImage(video, 0, 0);
   if (typeof Draw !== 'undefined' && Draw.showing) drawShapes(ctx, Draw.showing.shapes, c.width, c.height);
   if (typeof TR !== 'undefined' && TR.on) drawTrackingOverlay(ctx, c.width, c.height, true);
+  if (typeof drawAnnotations === 'function') drawAnnotations(ctx, c.width, c.height, video.currentTime);
   const data = c.toDataURL('image/png');
   const name = (project.info.name || (videoInfo.name || 'match').replace(/\.[^.]+$/, '')) + ' ' + fmtTime(video.currentTime).replace(':', '-') + ' f' + Math.round(video.currentTime / frameDur()) + '.png';
   if (project.dir && api.writeBinary) { const f = await api.writeBinary({ file: project.dir + '/screenshots/' + name.replace(/[\\/:*?"<>|]/g, ''), base64: data.split(',')[1] }); toast('📷 Saved to screenshots: ' + name, 'ok'); return f; }

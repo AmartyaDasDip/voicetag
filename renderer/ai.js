@@ -40,7 +40,12 @@ async function aiStartDialog() {
   const dur = video.duration || 0, now = video.currentTime || 0;
   const hasIO = clipIO.in != null && clipIO.out != null;
   const def = info.recommended || 'fast';
+  const cov = aiCalCoverage(now, Math.min(dur, now + 30));
   const html = `
+    ${cov.ok ? `<p class="small" style="color:var(--ok)">✓ Pitch calibrated – only people inside the pitch will become players.</p>`
+      : `<div class="warnbox"><b>Step 1: calibrate the pitch first.</b> The AI then tracks only the people <b>inside the pitch</b>: the referee is shown as REF,
+        and the assistant referees, coaches and cameramen are left out. (You can also calibrate afterwards and re-import.)
+        <div class="toolbar" style="margin-top:6px"><button class="small primary" id="aiCalNow">📐 Calibrate the pitch now</button></div></div>`}
     <p class="small muted">The AI finds every person on the pitch, follows them from frame to frame and splits them into two teams by shirt colour.
       The results become normal tracks you can correct, name and use in the 2D view, heat maps and exports. Works best on the wide (tactical / main) camera.</p>
     <h4>What to analyse</h4>
@@ -56,7 +61,7 @@ async function aiStartDialog() {
     <label class="blk"><input type="checkbox" id="aiCpu"> Use the processor only (tick this if the graphics card causes problems)</label>
     <p class="small muted">This PC: ${info.ramGB} GB RAM, ${info.cores} processor threads. ${info.gpu ? 'The graphics card is used automatically when possible (DirectX 12).' : ''} You can keep tagging while it runs.</p>`;
   let opts = null;
-  const r = await Dlg.open('🤖 Auto-detect players', html, [{ label: 'Cancel' }, { label: 'Start', primary: true, value: 'go', onClick: () => {
+  const pr = Dlg.open('🤖 Auto-detect players', html, [{ label: 'Cancel' }, { label: 'Start', primary: true, value: 'go', onClick: () => {
     const b = $('#dlgBody'), mode = b.querySelector('input[name=aiRange]:checked').value;
     let start = now, d = Number(b.querySelector('#aiSecs').value) || 30;
     if (mode === 'io') { start = clipIO.in; d = clipIO.out - clipIO.in; }
@@ -64,6 +69,9 @@ async function aiStartDialog() {
     d = Math.min(d, Math.max(0.5, dur - start));
     opts = { start: Math.round(start * 1000) / 1000, duration: Math.round(d * 1000) / 1000, quality: b.querySelector('#aiQ').value, stride: Number(b.querySelector('#aiStride').value), cpuOnly: b.querySelector('#aiCpu').checked, ball: b.querySelector('#aiBallMode').value, wideOnly: !!(b.querySelector('#aiWide') && b.querySelector('#aiWide').checked) };
   } }]);
+  const cb = $('#dlgBody').querySelector('#aiCalNow');
+  if (cb) cb.onclick = () => { $('#dlgX').click(); setTimeout(() => openCalibration(null), 300); toast('Click the pitch landmarks you can see – then start 🤖 Auto-detect players again', 'info', 6000); };
+  const r = await pr;
   if (r !== 'go' || !opts) return;
   aiRun(opts);
 }
@@ -135,41 +143,105 @@ function aiOffPitchShare(tr) {
   return n >= 3 ? off / n : null;
 }
 
+// does the range have a pitch calibration? (each wide / medium camera shot needs its own)
+function aiCalCoverage(t0, t1) {
+  const cals = TR.cals.filter(c => c.type !== 'none' && c.H);
+  if (!cals.length) return { ok: false, shots: 0, done: 0 };
+  if ((TR.shots || []).length) {
+    const sh = sortedShots().filter(x => trackableShot(x) && x.t1 > t0 + 0.2 && x.t0 < t1 - 0.2);
+    const done = sh.filter(x => cals.some(c => c.t >= x.t0 - 0.01 && c.t < x.t1)).length;
+    return { ok: done > 0, shots: sh.length, done };
+  }
+  const before = sortedCals().filter(c => c.t <= t0 + 1e-6).pop();
+  return { ok: !!(before && before.type !== 'none') || cals.some(c => c.t > t0 && c.t < t1), shots: 0, done: 0 };
+}
+
+// camera cuts, shot boundaries and camera movement of a run go into the project first: the calibration follows
+// the camera with them, and the "who is who" decision needs the calibration at every moment of the run
+function aiApplyCamera(res, run) {
+  const m = res.meta, t0 = m.start, t1 = m.start + m.duration;
+  if (res.cutTimes && res.cutTimes.length) TR.cuts = [...new Set((TR.cuts || []).filter(c => c < t0 - 0.01 || c > t1 + 0.01).concat(res.cutTimes.map(c => Math.round(c * 1000) / 1000)))].sort((a, b) => a - b);
+  // the AI looks at the cut frame by frame: move the shot boundaries of the (coarser) shot scan onto it
+  if (res.cutTimes && res.cutTimes.length && (TR.shots || []).length) {
+    const s = sortedShots();
+    res.cutTimes.forEach(c => { for (let i = 1; i < s.length; i++) if (c < s[i].t0 && s[i].t0 - c < 0.2 && c > s[i - 1].t0 + 0.2) { s[i - 1].t1 = c; s[i].t0 = c; } });
+    TR.shots = s;
+  }
+  if (res.camera && res.camera.length) {
+    if (!TR.camera) TR.camera = [];
+    TR.camera = TR.camera.map(sg => ({ id: sg.id, pts: sg.pts.filter(p => p[0] < t0 - 0.01 || p[0] > t1 + 0.01) })).filter(sg => sg.pts.length > 1);
+    const bySeg = new Map(); res.camera.forEach(p => { const k = run + ':' + (p[3] || 0); if (!bySeg.has(k)) bySeg.set(k, []); bySeg.get(k).push([p[0], p[1], p[2]]); });
+    bySeg.forEach((pts, id) => { if (pts.length > 1) TR.camera.push({ id, pts }); });
+  }
+}
+// who is who, without changing the project yet (for the result dialog)
+function aiPreviewRoles(res) {
+  const saved = { cuts: TR.cuts, shots: TR.shots, camera: TR.camera };
+  try {
+    TR.cuts = (TR.cuts || []).slice(); TR.shots = (TR.shots || []).map(x => Object.assign({}, x)); TR.camera = (TR.camera || []).map(sg => ({ id: sg.id, pts: sg.pts }));
+    aiApplyCamera(res, 'preview');
+    return classifyAiTracks(res);
+  } finally { TR.cuts = saved.cuts; TR.shots = saved.shots; TR.camera = saved.camera; }
+}
+const aiRoleCount = (roles, role, team) => [...roles.values()].filter(r => r.role === role && (team === undefined || r.team === team)).length;
+
 async function aiResultDialog(res, opts) {
   const m = res.meta, tracks = res.tracks;
-  const cnt = k => tracks.filter(t => t.team === k).length;
   const cl = res.clusters || [];
-  const hasCal = TR.cals.some(c => c.type !== 'none');
+  const cov = aiCalCoverage(m.start, m.start + m.duration);
+  const roles = cov.ok ? aiPreviewRoles(res) : null;
+  const cnt = k => roles ? aiRoleCount(roles, 'player', k) : tracks.filter(t => t.team === k).length;
   const prevAi = TR.tracks.filter(t => t.ai).length;
-  const hexRgb = h => { const m = /^#?([0-9a-f]{6})$/i.exec(h || ''); return m ? [0, 2, 4].map(i => parseInt(m[1].substr(i, 2), 16)) : null; };
+  const hexRgb = h => { const x = /^#?([0-9a-f]{6})$/i.exec(h || ''); return x ? [0, 2, 4].map(i => parseInt(x[1].substr(i, 2), 16)) : null; };
   const d = (a, b) => a && b ? Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) : 0;
   const hc = hexRgb(config.general.homeColor), ac = hexRgb(config.general.awayColor);
   const swap = cl.length === 2 && hc && ac && d(cl[0], hc) + d(cl[1], ac) > d(cl[0], ac) + d(cl[1], hc);
+  const rc = r => roles ? aiRoleCount(roles, r) : 0;
+  const roleRows = roles ? `
+    <table class="aimap"><tr><th>Who</th><th>Tracks</th><th></th></tr>
+      <tr><td>🧤 Goalkeepers</td><td>${rc('gk')}</td><td class="small muted">a third kit that stays in a penalty area → player of the team defending that goal</td></tr>
+      <tr><td>⬛ Referee</td><td>${rc('ref')}</td><td class="small muted">shown as REF, never as a player</td></tr>
+      <tr><td>🚩 Assistant referees</td><td>${rc('ar')}</td><td class="small muted">on the touchlines – not players</td></tr>
+      <tr><td>🚫 Outside the pitch</td><td>${rc('staff')}</td><td class="small muted">coaches, substitutes, ball boys, cameramen – not players</td></tr>
+      ${rc('unknown') ? `<tr><td>❔ Not sure</td><td>${rc('unknown')}</td><td class="small muted">inside the pitch, but neither team kit – imported hidden; give them a team with ✎</td></tr>` : ''}
+    </table>` : '';
   const html = `
     <p>Analysed <b>${fmtTime(m.start)} – ${fmtTime(m.start + m.duration)}</b>: ${m.frames} frames in ${aiDur(m.seconds)} (${m.framesPerSecond} frames/s, ${m.provider === 'dml' ? 'graphics card' : 'processor'}, ${esc(m.model)}).</p>
-    <p>Found <b>${tracks.length}</b> tracks${res.ball.length ? ` and the ball in ${res.ball.length} of ${m.frames} frames (${res.ballStats ? res.ballStats.coverage : Math.round(res.ball.length / m.frames * 100)}%)` : ''}.
+    <p>Found <b>${tracks.length}</b> people${res.ball.length ? ` and the ball in ${res.ball.length} of ${m.frames} frames (${res.ballStats ? res.ballStats.coverage : Math.round(res.ball.length / m.frames * 100)}%)` : ''}.
       ${res.ballStats && res.ballStats.mode === 'zoom' ? `<span class="small muted">${res.ballStats.fromZoom != null ? `${res.ballStats.fromZoom} of these were found only by the zoomed second look.` : ''}</span>` : ''}</p>
+    ${roles ? `<p class="small" style="color:var(--ok)">✓ The pitch is calibrated: only people <b>inside the pitch</b> become players. Referee, assistant referees and everybody outside the lines are recognised and kept apart.</p>`
+      : `<div class="warnbox"><b>⚠ The pitch is not calibrated for this part of the video.</b><br>Without the pitch the AI cannot tell players from the referee, the assistant referees on the touchline, coaches or cameramen – they would all be counted.
+        <b>Calibrate the pitch first</b>, then press <b>↺ Re-import last run</b> (the analysis is kept – no need to run it again).
+        <div class="toolbar" style="margin-top:6px"><button class="small primary" id="aiCalFirst">📐 Calibrate the pitch first</button></div></div>`}
     <h4>Which team is which?</h4>
-    <table class="aimap"><tr><th>Kit colour</th><th>Tracks</th><th>Import as</th></tr>
+    <table class="aimap"><tr><th>Kit colour</th><th>Players</th><th>Import as</th></tr>
       ${['A', 'B'].map((k, i) => `<tr><td><span class="swatch" style="background:${rgbHex(cl[i])}"></span> Group ${k}</td><td>${cnt(k)}</td>
         <td><select id="aiMap${k}"><option value="Home" ${(i === 0) !== swap ? 'selected' : ''}>${esc(teamName('Home'))}</option><option value="Away" ${(i === 1) !== swap ? 'selected' : ''}>${esc(teamName('Away'))}</option><option value="skip">don’t import</option></select></td></tr>`).join('')}
-      <tr><td><span class="swatch" style="background:#bbb"></span> Other (referees, keepers, staff)</td><td>${cnt('other')}</td>
-        <td><select id="aiMapO"><option value="Neutral">Neutral / other</option><option value="skip">don’t import</option></select></td></tr></table>
-    <p class="small muted">Tip: set each team’s kit colour in Match / project details and the right team is picked for you next time.
-      The goalkeepers usually wear a different colour, so they land in “Other” – change them to the right team with ✎ after importing.</p>
+      ${roles ? '' : `<tr><td><span class="swatch" style="background:#bbb"></span> Other kits (referees, keepers, staff)</td><td>${tracks.filter(t => t.team === 'other').length}</td>
+        <td><select id="aiMapO"><option value="Neutral">hidden “other” tracks</option><option value="skip">don’t import</option></select></td></tr>`}</table>
+    ${roleRows}
+    <p class="small muted">Tip: set each team’s kit colour in Match / project details and the right team is picked for you next time.</p>
     <h4>Options</h4>
     <label class="blk">Ignore tracks shorter than <input type="number" id="aiMin" value="1" min="0" max="30" step="0.5" style="width:60px"> seconds</label>
     <label class="blk"><input type="checkbox" id="aiBall" ${res.ball.length ? 'checked' : 'disabled'}> Import the ball (gaps up to 1 s are estimated; check it with ⏭ Next ball gap)</label>
-    <label class="blk"><input type="checkbox" id="aiOff" ${hasCal ? 'checked' : 'disabled'}> Drop people standing off the pitch ${hasCal ? '' : '<span class="muted">(needs a pitch calibration)</span>'}</label>
-    <label class="blk"><input type="checkbox" id="aiGK" ${hasCal ? 'checked' : 'disabled'}> Recognise goalkeepers (someone in “Other” who stays in a penalty area) ${hasCal ? '' : '<span class="muted">(needs a pitch calibration)</span>'}</label>
+    ${roles ? `<label class="blk"><input type="checkbox" id="aiKeepOff"> Also keep the assistant referees and the people outside the pitch (as hidden tracks)</label>` : ''}
     ${prevAi ? `<label class="blk"><input type="checkbox" id="aiReplace" checked> Replace the ${prevAi} AI tracks already in this range</label>` : ''}`;
   let choice = null;
-  const r = await Dlg.open('🤖 AI results', html, [{ label: 'Discard' }, { label: 'Import tracks', primary: true, value: 'imp', onClick: () => {
-    const b = $('#dlgBody');
-    choice = { A: b.querySelector('#aiMapA').value, B: b.querySelector('#aiMapB').value, other: b.querySelector('#aiMapO').value,
-      min: Number(b.querySelector('#aiMin').value) || 0, ball: b.querySelector('#aiBall').checked, off: b.querySelector('#aiOff').checked, gk: b.querySelector('#aiGK').checked,
+  const p = Dlg.open('🤖 AI results', html, [{ label: 'Discard' }, { label: 'Import tracks', primary: true, value: 'imp', onClick: () => {
+    const b = $('#dlgBody'), o = b.querySelector('#aiMapO');
+    choice = { A: b.querySelector('#aiMapA').value, B: b.querySelector('#aiMapB').value, other: o ? o.value : 'Neutral',
+      min: Number(b.querySelector('#aiMin').value) || 0, ball: b.querySelector('#aiBall').checked,
+      keepOff: !!(b.querySelector('#aiKeepOff') && b.querySelector('#aiKeepOff').checked),
       replace: !!(b.querySelector('#aiReplace') && b.querySelector('#aiReplace').checked) };
   } }]);
+  const cf = $('#dlgBody') && $('#dlgBody').querySelector('#aiCalFirst');
+  if (cf) cf.onclick = () => {
+    $('#dlgX').click();
+    video.pause(); video.currentTime = m.start + Math.min(1, m.duration / 2);
+    toast('Click the pitch landmarks you can see. Afterwards: Track tab → ↺ Re-import last run', 'info', 6000);
+    setTimeout(() => openCalibration(null), 400);
+  };
+  const r = await p;
   if (r !== 'imp' || !choice) return;
   aiImport(res, choice);
 }
@@ -179,19 +251,34 @@ function aiImport(res, ch) {
   const m = res.meta, t0 = m.start, t1 = m.start + m.duration, run = 'ai' + Date.now().toString(36);
   if (ch.replace) TR.tracks.forEach(tk => { if (tk.ai) tk.points = tk.points.filter(p => p.src !== 'ai' || p.t < t0 - 0.01 || p.t > t1 + 0.01); });
   TR.tracks = TR.tracks.filter(tk => !tk.ai || tk.points.length);
-  const counters = {};
-  let added = 0, dropped = 0;
+  // camera first: cuts, shot boundaries and camera movement (the calibration follows the camera with them)
+  aiApplyCamera(res, run);
+  const roles = aiCalCoverage(t0, t1).ok ? classifyAiTracks(res) : null;
+  const counters = {}, n = { player: 0, gk: 0, ref: 0, ar: 0, staff: 0, unknown: 0, short: 0, left: 0 };
   const label = team => { counters[team] = (counters[team] || 0) + 1; return (team === 'Home' ? 'H' : team === 'Away' ? 'A' : 'X') + counters[team]; };
+  const gks = [];
   res.tracks.forEach(tr => {
-    const team = ch[tr.team] || ch.other;
-    if (team === 'skip') return;
-    if (tr.points[tr.points.length - 1].t - tr.points[0].t < ch.min) { dropped++; return; }
-    if (ch.off) { const s = aiOffPitchShare(tr); if (s != null && s > 0.6) { dropped++; return; } }
-    const tk = newTrack({ team: team === 'Neutral' ? 'Neutral' : team, kind: team === 'Neutral' ? 'other' : 'player', label: label(team),
-      ai: { run, id: tr.id, colour: tr.colour, interrupted: !!tr.interrupted, afterCut: !!tr.afterCut } });
-    if (team === 'Neutral') tk.color = rgbHex(tr.colour);
+    if (tr.points[tr.points.length - 1].t - tr.points[0].t < ch.min) { n.short++; return; }
+    const ro = roles ? roles.get(tr.id) : { role: tr.team === 'A' || tr.team === 'B' ? 'player' : 'unknown', team: tr.team === 'other' ? null : tr.team };
+    const role = ro ? ro.role : 'unknown';
+    const ai = { run, id: tr.id, colour: tr.colour, interrupted: !!tr.interrupted, afterCut: !!tr.afterCut, role, why: ro && ro.why };
+    let tk = null;
+    if (role === 'player') {
+      const team = ch[ro.team]; if (!team || team === 'skip') { n.left++; return; }
+      tk = newTrack({ team, kind: 'player', label: label(team), ai });
+    } else if (role === 'gk') {
+      tk = newTrack({ team: 'Neutral', kind: 'other', role: 'gk', label: 'GK', ai }); gks.push(tk);
+    } else if (role === 'ref') {
+      tk = newTrack({ team: 'Neutral', kind: 'ref', label: 'Referee', ai });
+    } else if (role === 'ar' || role === 'staff') {
+      if (!ch.keepOff) { n[role]++; return; }
+      tk = role === 'ar' ? newTrack({ team: 'Neutral', kind: 'ref', role: 'ar', label: 'AR', ai }) : newTrack({ team: 'Neutral', kind: 'other', role: 'staff', label: 'Staff', ai });
+    } else {
+      if (!roles && ch.other === 'skip') { n.left++; return; }
+      tk = newTrack({ team: 'Neutral', kind: 'other', role: 'unknown', label: label('Neutral'), ai }); tk.color = rgbHex(tr.colour);
+    }
     tk.points = tr.points.map(p => ({ t: qt(p.t), x: p.x, y: p.y, src: 'ai', vis: 'v', conf: p.conf }));
-    added++;
+    n[role === 'gk' ? 'gk' : role]++;
   });
   if (ch.ball && res.ball.length) {
     let tk = TR.tracks.find(x => x.kind === 'ball');
@@ -203,26 +290,27 @@ function aiImport(res, ch) {
     const add = res.ball.map(b => ({ t: qt(b.t), x: b.x, y: b.y, src: 'ai', vis: 'v', conf: b.conf })).filter(p => !keep.some(q => Math.abs(q.t - p.t) < fd * 0.51));
     tk.points = keep.concat(add).sort((a, b) => a.t - b.t);
   }
-  // camera cuts seen by this run: tracks never continue silently across them
-  if (res.cutTimes && res.cutTimes.length) TR.cuts = [...new Set((TR.cuts || []).filter(c => c < t0 - 0.01 || c > t1 + 0.01).concat(res.cutTimes.map(c => Math.round(c * 1000) / 1000)))].sort((a, b) => a - b);
-  // the AI looks at the cut frame by frame: move the shot boundaries of the (coarser) shot scan onto it
-  if (res.cutTimes && res.cutTimes.length && (TR.shots || []).length) {
-    const s = sortedShots();
-    res.cutTimes.forEach(c => { for (let i = 1; i < s.length; i++) if (c < s[i].t0 && s[i].t0 - c < 0.2 && c > s[i - 1].t0 + 0.2) { s[i - 1].t1 = c; s[i].t0 = c; } });
-    TR.shots = s;
-  }
-  // camera movement of this run (one segment per shot) – lets calibrations follow the camera
-  if (res.camera && res.camera.length) {
-    if (!TR.camera) TR.camera = [];
-    TR.camera = TR.camera.map(sg => ({ id: sg.id, pts: sg.pts.filter(p => p[0] < t0 - 0.01 || p[0] > t1 + 0.01) })).filter(sg => sg.pts.length > 1);
-    const bySeg = new Map(); res.camera.forEach(p => { const k = run + ':' + (p[3] || 0); if (!bySeg.has(k)) bySeg.set(k, []); bySeg.get(k).push([p[0], p[1], p[2]]); });
-    bySeg.forEach((pts, id) => { if (pts.length > 1) TR.camera.push({ id, pts }); });
-  }
-  const gks = ch.gk && typeof findGoalkeepers === 'function' ? applyGoalkeepers(findGoalkeepers(), true) : 0;
+  // goalkeepers: the team whose outfield players are, on average, nearer the other goal defends this one
+  const means = teamSideMeans(t0, t1), { L } = pitchDims();
+  gks.forEach(tk => {
+    const s = trackPlaces({ points: tk.points }), left = s.n ? s.mx < L / 2 : null;
+    let team = null;
+    if (left != null && means.Home != null && means.Away != null) team = left === (means.Home < means.Away) ? 'Home' : 'Away';
+    else if (left != null && (means.Home != null || means.Away != null)) { const k = means.Home != null ? 'Home' : 'Away', o = k === 'Home' ? 'Away' : 'Home'; team = left === (means[k] < L / 2) ? k : o; }
+    if (team) { tk.kind = 'player'; tk.team = team; tk.role = ''; tk.ai.gk = true; logCorrection(tk, tk.points[0].t, 'assign', 'goalkeeper ' + teamName(team)); }
+    else tk.label = 'GK?';
+  });
   TR.settings.showAll = true; TR.settings.overlay = true;
   if (Number(TR.settings.maxGap) < 1) TR.settings.maxGap = 1;
   markDirty(); autosave(); renderTrackTab(); paintTracking(true);
-  toast(`Imported ${added} AI tracks` + (dropped ? ` (${dropped} short/off-pitch skipped)` : '') + (gks ? `, ${gks} goalkeeper(s) recognised` : ''), 'ok', 3500);
+  const parts = [`${n.player + n.gk} player tracks` + (n.gk ? ` (${n.gk} goalkeeper${n.gk > 1 ? 's' : ''})` : '')];
+  if (n.ref) parts.push('the referee');
+  const left = [];
+  if (n.ar && !ch.keepOff) left.push(`${n.ar} assistant referee${n.ar > 1 ? 's' : ''}`);
+  if (n.staff && !ch.keepOff) left.push(`${n.staff} people outside the pitch`);
+  if (n.short) left.push(`${n.short} short tracks`);
+  toast(`Imported ${parts.join(' and ')}` + (left.length ? ` – left out ${left.join(', ')}` : '') + (n.unknown ? ` · ${n.unknown} unsure (hidden)` : '') + (roles ? '' : ' · no pitch calibration: calibrate and re-import to sort out referees and staff'), roles ? 'ok' : 'info', 5000);
+  return n;
 }
 
 function aiClearTracks() {

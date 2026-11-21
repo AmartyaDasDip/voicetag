@@ -63,7 +63,7 @@ async function applyNewerRecovery(p, file, auto) {
   if (!auto && !confirm(`This project has newer work that was not saved to the project file (saved automatically ${when}: ${(L.events || []).length} tags${L.trackCount ? ', ' + L.trackCount + ' tracks' : ''}).\n\nOK = use the newer work\nCancel = open the project file as it is`)) return false;
   p.events = L.events || p.events; p.nextId = L.nextId || p.nextId; if (L.match) p.match = L.match; if (L.clips) p.clips = L.clips;
   p.tracking = p.tracking || {};
-  ['cals', 'shots', 'cuts'].forEach(k => { if (L[k]) p.tracking[k] = L[k]; }); if (L.trlog) p.tracking.log = L.trlog;
+  ['cals', 'shots', 'cuts', 'anns'].forEach(k => { if (L[k]) p.tracking[k] = L[k]; }); if (L.trlog) p.tracking.log = L.trlog;
   if (rec.tracks) { try { const o = JSON.parse(rec.tracks); p.tracking.tracks = o.tracks; p.tracking.camera = o.camera; } catch (e) { /* tracks copy damaged: keep the file's */ } }
   AppLog.send('info', 'restored newer automatic copy of ' + file + ' from ' + L.savedAt);
   return new Date(recAt).toLocaleTimeString();
@@ -182,7 +182,7 @@ async function openProjectForm(mode) {   // mode: 'new' | 'edit' | 'save' | 'sav
   if (mode === 'edit') { checkpoint(); project.info = i; syncProjectToApp(); markDirty(); renderAll(); return true; }
   if (mode === 'new') {
     const keepTags = events.length && true;
-    if (!keepTags) { events = []; nextId = 1; open = {}; match = EMPTY_MATCH(); TR.tracks = []; TR.cals = []; TR.camera = []; TR.log = []; TR.shots = []; TR.cuts = []; clips = []; }
+    if (!keepTags) { events = []; nextId = 1; open = {}; match = EMPTY_MATCH(); TR.tracks = []; TR.cals = []; TR.camera = []; TR.log = []; TR.shots = []; TR.cuts = []; TR.anns = []; clips = []; }
     History.clear();
   }
   project.info = i;
@@ -235,7 +235,7 @@ async function restoreQuickSession(s) {
   hideDashboard(); if (!s) return;
   if (s.video && s.video.path && api.registerMedia) { const r = await api.registerMedia(s.video.path).catch(() => null); if (r) await loadVideo(r, true); else toast('The video of that session was not found: ' + s.video.name, 'bad', 4000); }
   events = s.events || []; nextId = s.nextId || (Math.max(0, ...events.map(e => e.id)) + 1); if (s.match) match = Object.assign(EMPTY_MATCH(), s.match);
-  if (typeof TR !== 'undefined') { TR.tracks = s.tracks || []; TR.cals = s.cals || []; TR.log = s.trlog || []; TR.camera = s.camera || []; TR.shots = s.shots || []; TR.cuts = s.cuts || []; }
+  if (typeof TR !== 'undefined') { TR.tracks = s.tracks || []; TR.cals = s.cals || []; TR.log = s.trlog || []; TR.camera = s.camera || []; TR.shots = s.shots || []; TR.cuts = s.cuts || []; TR.anns = s.anns || []; }
   if (typeof clips !== 'undefined') clips = s.clips || [];
   if (s.key) sessionKey = s.key;
   History.clear(); renderAll(); autosave(); toast('Session restored', 'ok');

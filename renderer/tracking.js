@@ -10,7 +10,7 @@
    player's feet; pitch positions (metres) come from the calibration.
    ===================================================================== */
 const TR = {
-  on: false, tracks: [], cals: [], sel: null, drag: null,
+  on: false, tracks: [], cals: [], anns: [], sel: null, drag: null,
   settings: { step: '5f', autoAdvance: true, interp: true, maxGap: 3, trail: 6, showLines: true, showAll: true }
 };
 const VIS_NAME = { v: 'visible', occ: 'occluded', out: 'out of frame', unk: 'unknown' };
@@ -230,6 +230,7 @@ function trackLabel(tk) {
 }
 function trackShort(tk) {
   if (tk.kind === 'ball') return '●';
+  if (tk.kind === 'ref' && !tk.playerId) return tk.role === 'ar' ? 'AR' : /^referee$/i.test(tk.label || 'Referee') ? 'REF' : (tk.label || 'REF').slice(0, 3);
   const p = tk.playerId && VOC.playersById[tk.playerId];
   if (p && p.num !== '' && p.num != null) return String(p.num);
   return (tk.label || (tk.kind === 'ref' ? 'R' : '?')).slice(0, 3);
@@ -321,12 +322,13 @@ function drawProjectedLines(ctx, H, W, Hh, color) {
   });
   ctx.restore();
 }
-function drawTrackingOverlay(ctx, W, H, forExport) {
-  const t = hasVideo() ? video.currentTime : curT();
+function drawTrackingOverlay(ctx, W, H, forExport, tAt) {
+  const t = tAt != null ? tAt : hasVideo() ? video.currentTime : curT();
   if (TR.settings.showLines) { const c = calAt(t); if (c) drawProjectedLines(ctx, c.H, W, H); }
   const r = Math.max(6, W / 110);
   TR.tracks.forEach(tk => {
     if (!TR.settings.showAll && tk.id !== TR.sel) return;
+    if (!trackDrawn(tk, forExport)) return;      // assistant referees, staff and unsure people only when asked for
     const p = posAt(tk, t);
     const sel = tk.id === TR.sel && !forExport;
     if (!p || p.kind === 'status') {
@@ -339,6 +341,16 @@ function drawTrackingOverlay(ctx, W, H, forExport) {
     else if (p.src === 'ai' && p.conf != null && p.conf < 0.4) { ctx.globalAlpha = 0.7; ctx.setLineDash([2, 2]); }
     if (tk.kind === 'ball') {
       ctx.beginPath(); ctx.arc(x, y, r * 0.55, 0, Math.PI * 2); ctx.fillStyle = col; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#000'; ctx.stroke();
+    } else if (tk.kind !== 'player') {
+      // officials and other people: a small diamond and a plain tag – never the players' team ellipse
+      const off = tk.kind === 'ref', d = r * 0.7;
+      ctx.beginPath(); ctx.moveTo(x, y - d * 0.55); ctx.lineTo(x + d, y); ctx.lineTo(x, y + d * 0.55); ctx.lineTo(x - d, y); ctx.closePath();
+      ctx.fillStyle = off ? '#111' : 'rgba(120,120,120,.6)'; ctx.fill(); ctx.lineWidth = sel ? 3 : 1.8; ctx.strokeStyle = off ? '#f4d03f' : '#ddd'; ctx.stroke();
+      ctx.setLineDash([]); const lbl = trackShort(tk), fs = Math.round(r * 0.95);
+      ctx.font = `700 ${fs}px Segoe UI, Arial`; ctx.textAlign = 'center';
+      const w = ctx.measureText(lbl).width + fs * 0.6, ty = y - r * 1.9;
+      ctx.fillStyle = off ? '#f4d03f' : 'rgba(60,60,60,.85)'; ctx.fillRect(x - w / 2, ty - fs * 0.85, w, fs * 1.15);
+      ctx.fillStyle = off ? '#111' : '#eee'; ctx.fillText(lbl, x, ty);
     } else {
       ctx.beginPath(); ctx.ellipse(x, y, r * 1.25, r * 0.55, 0, 0, Math.PI * 2); ctx.lineWidth = sel ? 4 : 2.5; ctx.strokeStyle = col; ctx.stroke();
       if (p.kind === 'key' && p.src === 'manual') { ctx.globalAlpha = 0.25; ctx.fillStyle = col; ctx.fill(); ctx.globalAlpha = 1; }
@@ -466,12 +478,13 @@ function renderTrackTab() {
   if (el.classList.contains('hidden') && !TR.on) return;
   const s = TR.settings, tk = selTrack(), t = hasVideo() ? video.currentTime : 0;
   const p = tk ? posAt(tk, t) : null;
-  const groups = [['Home', teamName('Home')], ['Away', teamName('Away')], ['Neutral', 'Ball / referees / other']];
+  const groups = [['Home', teamName('Home')], ['Away', teamName('Away')], ['ref', 'Referee & assistants'], ['Neutral', 'Ball / other people']];
+  const roleBadge = x => { const r = trackRole(x); return r === 'gk' ? ' <span class="badge">GK</span>' : r === 'ar' ? ' <span class="badge">touchline</span>' : r === 'staff' ? ' <span class="badge">off the pitch</span>' : r === 'unknown' ? ' <span class="badge poor" title="Inside the pitch but neither team kit – give it a team with ✎ if it is a player">unsure</span>' : ''; };
   const list = groups.map(([team, name]) => {
-    const l = TR.tracks.filter(x => (x.kind === 'ball' || x.kind === 'ref' ? 'Neutral' : x.team) === team);
+    const l = TR.tracks.filter(x => (x.kind === 'ref' ? 'ref' : x.kind === 'ball' || x.kind === 'other' ? 'Neutral' : x.team) === team);
     if (!l.length) return '';
-    return `<h4>${esc(name)}</h4>` + l.map(x => `<div class="trk ${x.id === TR.sel ? 'sel' : ''}" data-tk="${x.id}"><span class="dot" style="background:${esc(trackColor(x))}"></span>
-      <span class="lb">${esc(trackLabel(x))}${x.ai ? ' <span class="badge aib">AI</span>' : ''}${typeof afterCutTrack === 'function' && afterCutTrack(x) ? ' <span class="badge cut" title="Starts after a camera cut – identity not confirmed">after cut</span>' : ''}</span><span class="cov">${esc(coverage(x))}</span>
+    return `<h4>${esc(name)}</h4>` + l.map(x => `<div class="trk ${x.id === TR.sel ? 'sel' : ''} ${trackDrawn(x, true) ? '' : 'hid'}" data-tk="${x.id}" ${trackDrawn(x, true) ? '' : 'title="Not drawn on the video, 2D or 3D (tick “officials & others” to see it)"'}><span class="dot" style="background:${esc(trackColor(x))}"></span>
+      <span class="lb">${esc(trackLabel(x))}${roleBadge(x)}${x.ai ? ' <span class="badge aib">AI</span>' : ''}${typeof afterCutTrack === 'function' && afterCutTrack(x) ? ' <span class="badge cut" title="Starts after a camera cut – identity not confirmed">after cut</span>' : ''}</span><span class="cov">${esc(coverage(x))}</span>
       <button class="small" data-tkedit="${x.id}" title="Edit">✎</button><button class="small danger" data-tkdel="${x.id}" title="Delete track">✕</button></div>`).join('');
   }).join('');
   const cals = sortedCals().map(c => { const q = calQuality(c); return `<div class="trk" data-cal="${c.id}"><span class="lb">${fmtTime(c.t)} ${c.type === 'none' ? '⛔ no calibration (cut / close-up)' : '🎯 ' + (c.points || []).length + ' points' + (c.blend ? ' · blends to next' : '')}</span>
@@ -485,13 +498,17 @@ function renderTrackTab() {
       <label>max gap <input type="number" id="tkGap" value="${esc(s.maxGap)}" min="0.2" max="30" step="0.5" style="width:60px"> s</label>
       <label><input type="checkbox" id="tkLines" ${s.showLines ? 'checked' : ''}> pitch lines</label>
       <label><input type="checkbox" id="tkAll" ${s.showAll ? 'checked' : ''}> show all tracks</label>
-      <label title="Show the tracks on the video while it plays, even when tracking mode is off"><input type="checkbox" id="tkOv" ${s.overlay ? 'checked' : ''}> tracks on video</label></div>
+      <label title="Show the tracks on the video while it plays, even when tracking mode is off"><input type="checkbox" id="tkOv" ${s.overlay ? 'checked' : ''}> tracks on video</label>
+      <label title="Draw the referee (black, REF) on the video, 2D and 3D – never as a player"><input type="checkbox" id="tkRef" ${s.showRef !== false ? 'checked' : ''}> referee</label>
+      <label title="Also draw the assistant referees, people outside the pitch and unsure people"><input type="checkbox" id="tkOthers" ${s.showOthers ? 'checked' : ''}> officials &amp; others</label></div>
     ${tk ? `<div class="exportbox" style="margin:0 0 10px"><b>${esc(trackLabel(tk))}</b> at ${fmtTime(t)} (frame ${Math.round(t / frameDur())}): <span class="${p ? 'ok' : 'muted'}">${p ? (p.kind === 'key' ? 'keyframe' : p.kind === 'interp' ? 'interpolated' : VIS_NAME[p.vis]) : 'no position'}</span>
       <div class="toolbar" style="margin-top:6px"><button class="small" data-vis="occ">Occluded here</button><button class="small" data-vis="out">Out of frame here</button><button class="small" data-vis="unk">Unknown here</button>
       <button class="small" id="tkHold" title="Copy the last known position to this frame (player standing still)">⇢ Same as last</button><button class="small" id="tkDelPt">Delete point</button></div>
       <div class="toolbar"><button class="small" id="tkPrevK">◀ prev keyframe</button><button class="small" id="tkNextK">next keyframe ▶</button><button class="small" id="tkBack">− step</button><button class="small" id="tkFwd">+ step</button></div></div>` : ''}
     <div id="shotBox"></div>
     <div id="edBox"></div>
+    ${hasVideo() && !TR.cals.some(c => c.type !== 'none') ? `<div class="warnbox small" style="padding:5px 8px;margin:0 0 8px"><b>Step 1 – the pitch:</b> calibrate this camera view first, then only people inside the pitch become players.
+      <button class="small primary" id="tkCalStep">📐 Calibrate the pitch</button></div>` : ''}
     <div id="aiBox"></div>
     <div id="ballBox"></div>
     <div class="toolbar"><button class="small" id="tkAddSquad">+ Players from squad</button><button class="small" id="tkAddH">+ Unknown ${esc(teamName('Home'))}</button><button class="small" id="tkAddA">+ Unknown ${esc(teamName('Away'))}</button><button class="small" id="tkAddBall">+ Ball</button><button class="small" id="tkAddRef">+ Referee</button></div>
@@ -514,6 +531,9 @@ function renderTrackTab() {
   el.querySelector('#tkLines').onchange = e => { s.showLines = e.target.checked; paintTracking(true); };
   el.querySelector('#tkAll').onchange = e => { s.showAll = e.target.checked; paintTracking(true); };
   el.querySelector('#tkOv').onchange = e => { s.overlay = e.target.checked; paintTracking(true); };
+  el.querySelector('#tkRef').onchange = e => { s.showRef = e.target.checked; markDirty(); renderTrackTab(); paintTracking(true); render2D(true); };
+  el.querySelector('#tkOthers').onchange = e => { s.showOthers = e.target.checked; markDirty(); renderTrackTab(); paintTracking(true); render2D(true); };
+  b('#tkCalStep', () => openCalibration(null));
   const fc = el.querySelector('#tkFollow'); if (fc) fc.onchange = e => { s.followCam = e.target.checked; markDirty(); autosave(); renderTrackTab(); paintTracking(true); render2D(true); };
   el.querySelectorAll('[data-vis]').forEach(x => x.onclick = () => { const k = selTrack(); if (!k) return; checkpoint(); setPoint(k, video.currentTime, { vis: x.dataset.vis, x: null, y: null, src: 'manual' }); autosave(); renderTrackTab(); paintTracking(true); if (TR.settings.autoAdvance) advance(1); });
   b('#tkHold', () => { const k = selTrack(); if (!k) return; const i = findIdx(k.points, video.currentTime - frameDur() * 0.6), last = k.points.slice(0, i + 1).reverse().find(q => q.vis === 'v'); if (!last) { toast('No earlier position', 'bad'); return; } checkpoint(); setPoint(k, video.currentTime, { x: last.x, y: last.y, src: 'manual', vis: 'v' }); autosave(); renderTrackTab(); paintTracking(true); if (TR.settings.autoAdvance) advance(1); });
@@ -554,7 +574,7 @@ function editTrack(id) {
   const tk = TR.tracks.find(x => x.id === id); if (!tk) return;
   let v = null;
   Dlg.open('✎ Track: ' + trackLabel(tk), `<div class="formgrid">
-    <label>Type</label><select id="teKind">${[['player', 'Player'], ['ball', 'Ball'], ['ref', 'Referee'], ['other', 'Other person']].map(([k, n]) => `<option value="${k}" ${tk.kind === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
+    <label>Type</label><select id="teKind">${[['player', 'Player'], ['ball', 'Ball'], ['ref', 'Referee'], ['ar', 'Assistant referee'], ['other', 'Other person (not drawn)']].map(([k, n]) => `<option value="${k}" ${(tk.kind === 'ref' && tk.role === 'ar' ? 'ar' : tk.kind) === k ? 'selected' : ''}>${n}</option>`).join('')}</select>
     <label>Team</label><select id="teTeam">${TEAMS.map(x => `<option value="${x}" ${tk.team === x ? 'selected' : ''}>${esc(teamName(x))}</option>`).join('')}</select>
     <label>Player (identity)</label><select id="tePlayer"><option value="">— not identified —</option>${config.players.map(p => `<option value="${p.id}" ${tk.playerId === p.id ? 'selected' : ''}>${esc((p.team === 'Away' ? '(opp) ' : '') + playerLabel(p) + (p.name ? ' – ' + p.name : ''))}</option>`).join('')}</select>
     <label>Label (if not identified)</label><input id="teLabel" value="${esc(tk.label)}">
@@ -564,8 +584,14 @@ function editTrack(id) {
   [{ label: 'Cancel' }, { label: 'Save', primary: true, value: 'ok', onClick: () => { v = { kind: $('#teKind').value, team: $('#teTeam').value, playerId: $('#tePlayer').value, label: $('#teLabel').value.trim(), color: $('#teColor').value, interp: $('#teInterp').value === '1' }; } }]).then(r => {
     if (r !== 'ok' || !v) return;
     checkpoint();
-    const p = VOC.playersById[v.playerId];
-    Object.assign(tk, v, { team: p ? (p.team || 'Home') : v.team, color: v.color === teamColor(p ? p.team : v.team) ? '' : v.color });
+    const p = VOC.playersById[v.playerId], wasKind = tk.kind, wasRole = tk.role || '';
+    const role = v.kind === 'ar' ? 'ar' : v.kind === 'other' ? (tk.role === 'staff' ? 'staff' : 'unknown') : '';
+    if (v.kind === 'ar') v.kind = 'ref';
+    if (v.kind !== wasKind && (v.kind === 'player' || v.kind === 'ref') && v.color === trackColor(tk)) v.color = '';   // new type: its own colour
+    if ((v.kind === 'ref' || v.kind === 'ball') && /^(X\d+|GK\??|Staff)$/.test(v.label)) v.label = v.kind === 'ball' ? 'Ball' : role === 'ar' ? 'AR' : 'Referee';
+    Object.assign(tk, v, { role, team: p ? (p.team || 'Home') : v.kind === 'player' ? v.team : 'Neutral', color: v.color && v.color === teamColor(p ? p.team : v.team) ? '' : v.color });
+    if (v.kind === 'player' && wasKind !== 'player') logCorrection(tk, tk.points.length ? tk.points[0].t : 0, 'assign', 'player ' + teamName(tk.team));
+    if (tk.ai && (v.kind !== wasKind || role !== wasRole)) tk.ai.userKind = true;   // your choice: "who is who" leaves it alone
     markDirty(); autosave(); renderTrackTab(); paintTracking(true);
   });
 }
@@ -674,9 +700,9 @@ function render2D(force) {
   let inner = '', shown = 0, total = 0;
   const trails = $('#p2trails').checked, trailSec = Number(TR.settings.trail) || 6, show = $('#p2show') ? $('#p2show').value : 'all';
   TR.tracks.forEach(tk => {
-    if (!tk.points.length) return;
+    if (!tk.points.length || !trackDrawn(tk)) return;
     if (show === 'ball' ? tk.kind !== 'ball' : show === 'sel' ? tk.id !== TR.sel : show !== 'all' ? (tk.kind === 'ball' ? false : tk.team !== show) : false) return;
-    total++;
+    if (tk.kind === 'player') total++;
     if (trails) {
       const pts = [];
       for (let s = Math.max(0, t - trailSec); s <= t + 1e-6; s += 0.2) { const p = posAt(tk, s); if (p && p.kind !== 'status') { const m = toPitch(s, p.x, p.y); if (m) pts.push(m); else pts.push(null); } else pts.push(null); }
@@ -686,15 +712,22 @@ function render2D(force) {
     const p = posAt(tk, t);
     if (!p || p.kind === 'status') return;
     const m = toPitch(t, p.x, p.y); if (!m) return;
-    shown++;
+    if (tk.kind === 'player') shown++;
     const interp = isEstimate(p), col = trackColor(tk);
+    if (tk.kind !== 'ball' && tk.kind !== 'player') {
+      const off = tk.kind === 'ref', x0 = m[0].toFixed(2), y0 = m[1].toFixed(2);
+      inner += `<g opacity="${interp ? .6 : 1}"><rect x="${(m[0] - 1.05).toFixed(2)}" y="${(m[1] - 1.05).toFixed(2)}" width="2.1" height="2.1" transform="rotate(45 ${x0} ${y0})" fill="${off ? '#111' : '#777'}" stroke="${tk.id === TR.sel ? '#2ecc71' : off ? '#f4d03f' : '#ddd'}" stroke-width=".35"/>
+        <text x="${x0}" y="${(m[1] - 1.9).toFixed(2)}" font-size="1.6" text-anchor="middle" fill="${off ? '#f4d03f' : '#ddd'}" font-weight="700">${esc(trackShort(tk))}</text></g>`;
+      return;
+    }
     if (tk.kind === 'ball') inner += `<circle cx="${m[0].toFixed(2)}" cy="${m[1].toFixed(2)}" r=".9" fill="${esc(col)}" stroke="#000" stroke-width=".25" opacity="${interp ? .6 : 1}"/>`;
     else inner += `<g opacity="${interp ? .6 : 1}"><circle cx="${m[0].toFixed(2)}" cy="${m[1].toFixed(2)}" r="1.7" fill="${esc(col)}" stroke="${tk.id === TR.sel ? '#2ecc71' : '#000'}" stroke-width="${tk.id === TR.sel ? .6 : .25}" ${interp ? 'stroke-dasharray=".6 .4"' : ''}/>
       <text x="${m[0].toFixed(2)}" y="${(m[1] + 0.75).toFixed(2)}" font-size="2" text-anchor="middle" fill="#fff" font-weight="700">${esc(trackShort(tk))}</text></g>`;
   });
   const view = c && TR.settings.showView !== false ? viewOf(c.H) : null;
   const sh = typeof shotAt === 'function' && TR.shots && TR.shots.length ? shotAt(t) : null;
-  $('#p2svg').innerHTML = pitchSvgFull(L, W, viewShadeSvg(view, L, W) + inner) + (c ? '' : `<div class="small warn" style="margin-top:3px">${sh && !trackableShot(sh) ? `${esc(SHOT_TYPES[sh.type] ? SHOT_TYPES[sh.type][0] : sh.type)} shot at ${fmtTime(t)} – not used for positions.` : `No pitch calibration at ${fmtTime(t)} – positions can’t be placed on the pitch.`}</div>`);
+  const ann = typeof annSvg === 'function' ? annSvg(t) : '';
+  $('#p2svg').innerHTML = pitchSvgFull(L, W, viewShadeSvg(view, L, W) + ann + inner) + (c ? '' : `<div class="small warn" style="margin-top:3px">${sh && !trackableShot(sh) ? `${esc(SHOT_TYPES[sh.type] ? SHOT_TYPES[sh.type][0] : sh.type)} shot at ${fmtTime(t)} – not used for positions.` : `No pitch calibration at ${fmtTime(t)} – positions can’t be placed on the pitch.`}</div>`);
   $('#p2info').textContent = (total ? `${shown}/${total} placed · ${fmtTime(t)}` : 'no tracks yet') + (view ? ` · ${Math.round(view.frac * 100)}% of pitch in view` : '');
 }
 $('#btn2D').onclick = () => { const b = $('#pitch2d'); b.classList.toggle('hidden'); render2D(true); };
@@ -750,7 +783,7 @@ $('#btnTrackJson').onclick = exportTrackingJson;
 function trackingSamples(filter = {}) {
   const { L, W } = pitchDims(), out = [];
   TR.tracks.forEach(tk => {
-    if (!tk.points.length || tk.kind === 'ref') return;
+    if (!tk.points.length || tk.kind === 'ref' || (tk.kind === 'other' && filter.kind !== 'other')) return;
     if (filter.kind && tk.kind !== filter.kind) return;
     if (filter.notKind && tk.kind === filter.notKind) return;
     if (filter.team && (tk.kind === 'ball' ? 'Neutral' : tk.team) !== filter.team) return;

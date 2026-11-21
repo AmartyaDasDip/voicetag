@@ -6,5 +6,5 @@ export {
   Group, Mesh, PlaneGeometry, CircleGeometry, RingGeometry, CylinderGeometry, CapsuleGeometry, SphereGeometry,
   MeshLambertMaterial, MeshBasicMaterial, CanvasTexture, SRGBColorSpace, Sprite, SpriteMaterial,
   Line, LineBasicMaterial, BufferGeometry, BufferAttribute, Vector3, Shape, ShapeGeometry, DoubleSide,
-  QuadraticBezierCurve3, TubeGeometry, LinearMipmapLinearFilter, REVISION
+  QuadraticBezierCurve3, CatmullRomCurve3, TubeGeometry, ConeGeometry, AdditiveBlending, LinearMipmapLinearFilter, REVISION
 } from 'three';

@@ -317,17 +317,28 @@ ipcMain.handle('cancel-convert', async () => { if (currentConvert) exporter.canc
 /* ------------------------------------------------------------------ 3D VIDEO (frames from the 3D view → MP4) */
 let v3job = null;
 function v3Abort() { if (!v3job) return; const j = v3job; v3job = null; try { j.proc.kill('SIGKILL'); } catch (e) { /* ignore */ } try { fs.rmSync(j.part, { force: true }); } catch (e) { /* ignore */ } }
-ipcMain.handle('v3d-begin', async (e, { defaultName, fps, w, h }) => {
+// frames rendered in the window → MP4. Used by the 3D replay (JPEG frames) and by the annotated video (3.1): there the
+// frames are transparent PNG overlays that ffmpeg lays over the original video (`under`), with its sound
+ipcMain.handle('v3d-begin', async (e, { defaultName, fps, w, h, title, under }) => {
   const ff = ffmpegPath();
   if (!ff) return { ok: false, error: 'ffmpeg is missing from this build.' };
   v3Abort();
-  const r = await dialog.showSaveDialog(win, { title: 'Save 3D video', defaultPath: defaultName || '3D replay.mp4', filters: [{ name: 'MP4 video', extensions: ['mp4'] }] });
+  if (under && (!under.path || !allowedMedia.has(path.resolve(under.path)))) return { ok: false, error: 'The video file is not available.' };
+  const r = await dialog.showSaveDialog(win, { title: title || 'Save 3D video', defaultPath: defaultName || '3D replay.mp4', filters: [{ name: 'MP4 video', extensions: ['mp4'] }] });
   if (r.canceled || !r.filePath) return { ok: false, cancelled: true };
   const out = /\.mp4$/i.test(r.filePath) ? r.filePath : r.filePath + '.mp4', part = out + '.part.mp4';
   fs.mkdirSync(path.dirname(out), { recursive: true });
   const fpsN = Math.max(10, Math.min(60, Number(fps) || 30));
-  const proc = require('child_process').spawn(ff, ['-hide_banner', '-y', '-f', 'image2pipe', '-framerate', String(fpsN), '-c:v', 'mjpeg', '-i', '-',
-    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-r', String(fpsN), '-movflags', '+faststart', '-f', 'mp4', part], { windowsHide: true });
+  const W = Math.max(64, Math.round(Number(w) / 2) * 2 || 1280), H = Math.max(64, Math.round(Number(h) / 2) * 2 || 720);
+  const args = under
+    ? ['-hide_banner', '-y', '-ss', String(Math.max(0, Number(under.t0) || 0)), '-t', String(Math.max(0.1, Number(under.dur) || 1)), '-i', under.path,
+      '-f', 'image2pipe', '-framerate', String(fpsN), '-c:v', 'png', '-i', '-',
+      '-filter_complex', `[0:v]scale=${W}:${H},setsar=1,fps=${fpsN}[b];[1:v]format=rgba,scale=${W}:${H}[o];[b][o]overlay=0:0:eof_action=pass:format=auto[v]`,
+      '-map', '[v]'].concat(under.sound ? ['-map', '0:a?', '-c:a', 'aac', '-b:a', '160k'] : ['-an'])
+      .concat(['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-t', String(Math.max(0.1, Number(under.dur) || 1)), '-movflags', '+faststart', '-f', 'mp4', part])
+    : ['-hide_banner', '-y', '-f', 'image2pipe', '-framerate', String(fpsN), '-c:v', 'mjpeg', '-i', '-',
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-r', String(fpsN), '-movflags', '+faststart', '-f', 'mp4', part];
+  const proc = require('child_process').spawn(ff, args, { windowsHide: true });
   const job = { proc, out, part, err: '', exited: false };
   job.done = new Promise(res => proc.on('close', code => { job.exited = true; res(code); }));
   proc.on('error', err => { job.err += String(err.message || err); });

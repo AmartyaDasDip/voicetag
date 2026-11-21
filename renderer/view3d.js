@@ -145,12 +145,14 @@ function v3Fig(tk) {
   if (tk.kind === 'ball') {
     const b = new T.Mesh(V3.geo.ball, lam(col === '#ffd23b' ? '#fff6c9' : col)); b.position.y = 0.22; g.add(b); shadow.scale.setScalar(0.42);
   } else {
-    const body = new T.Mesh(V3.geo.body, lam(col)); body.position.y = 0.95; g.add(body);
-    const head = new T.Mesh(V3.geo.head, lam(v3Shade(col, 0.45))); head.position.y = 1.86; g.add(head);
-    const ring = new T.Mesh(V3.geo.ring, new T.MeshBasicMaterial({ color: sel ? '#2ecc71' : col, transparent: true, side: T.DoubleSide }));
+    // officials: a black figure with a yellow ring and a yellow REF tag; other people grey
+    const off = tk.kind === 'ref', other = tk.kind === 'other', bodyCol = off ? '#1b1b1b' : other ? '#8a8a8a' : col, tagCol = off ? '#f4d03f' : other ? '#9a9a9a' : col;
+    const body = new T.Mesh(V3.geo.body, lam(bodyCol)); body.position.y = 0.95; if (off || other) body.scale.set(0.85, 0.94, 0.85); g.add(body);
+    const head = new T.Mesh(V3.geo.head, lam(off ? '#f4d03f' : v3Shade(bodyCol, 0.45))); head.position.y = off || other ? 1.77 : 1.86; g.add(head);
+    const ring = new T.Mesh(V3.geo.ring, new T.MeshBasicMaterial({ color: sel ? '#2ecc71' : tagCol, transparent: true, side: T.DoubleSide }));
     ring.rotation.x = -Math.PI / 2; ring.position.y = 0.03; if (sel) ring.scale.setScalar(1.35); mats.push(ring.material); g.add(ring);
     if (lab) {
-      const sm = new T.SpriteMaterial({ map: v3LabelTex(lab, col, sel), depthTest: false, transparent: true });
+      const sm = new T.SpriteMaterial({ map: v3LabelTex(lab, tagCol, sel), depthTest: false, transparent: true });
       const sp = new T.Sprite(sm); sp.position.y = 2.6; sp.scale.set(1.3, 0.65, 1); sp.renderOrder = 10; mats.push(sm); g.add(sp); f.label = sp;
     }
   }
@@ -165,7 +167,7 @@ function v3ToPitch(c, x, y) {
   const { L, W } = pitchDims();
   return r[0] < -8 || r[0] > L + 8 || r[1] < -8 || r[1] > W + 8 ? null : [r[0], r[1]];
 }
-const v3Shown = tk => tk.points.length && (tk.kind === 'player' || tk.kind === 'ball' || tk.kind === 'ref');
+const v3Shown = tk => tk.points.length && trackDrawn(tk);
 
 /* ---------------------------------------------------------------- one moment */
 function v3Update(t) {
@@ -175,14 +177,14 @@ function v3Update(t) {
   const placed = [];
   TR.tracks.forEach(tk => {
     if (!v3Shown(tk)) return;
-    if (tk.kind !== 'ball') { const a = tk.points[0].t, b = tk.points[tk.points.length - 1].t; if (t >= a - 0.5 && t <= b + 0.5) total++; }
+    if (tk.kind === 'player') { const a = tk.points[0].t, b = tk.points[tk.points.length - 1].t; if (t >= a - 0.5 && t <= b + 0.5) total++; }
     const p = posAt(tk, t); if (!p || p.kind === 'status' || !c) return;
     const m = v3ToPitch(c, p.x, p.y); if (!m) return;
     const f = v3Fig(tk), [wx, wz] = v3W(m[0], m[1]), e = isEstimate(p);
     f.g.position.set(wx, 0, wz); f.g.visible = !(V3.cam === 'player' && tk.id === TR.sel); seen.add(tk.id);
     v3SetOpacity(f, e ? 0.45 : 1);
     if (tk.kind === 'ball') { V3.ballPos = new T.Vector3(wx, 0, wz); return; }
-    shown++; if (e) est++;
+    if (tk.kind === 'player') { shown++; if (e) est++; }
     if (tk.kind === 'player') { sx += wx; sz += wz; sn++; placed.push({ tk, m, e }); }
     if (tk.id === TR.sel) V3.selPos = new T.Vector3(wx, 0, wz);
   });
@@ -196,6 +198,7 @@ function v3Update(t) {
   v3Trails(t, seen);
   v3Overlays(t, placed, c);
   v3Events(t);
+  if (typeof v3Anns === 'function') v3Anns(t);
 }
 function v3Trails(t, seen) {
   const T = V3.T, on = V3.opts.trails, sec = Number(TR.settings.trail) || 6, step = 0.2, n = Math.round(sec / step) + 1;
@@ -401,7 +404,7 @@ function v3Loop(now) {
     if (r.playing) { r.t += dt * r.speed; if (r.t >= r.t1) { if (r.loop) r.t = r.t0; else { r.t = r.t1; r.playing = false; } } v3ReplayUi(); }
     t = r.t;
   } else t = curT();
-  const changed = V3.dirty || Math.abs(t - V3.t) > 1e-4;
+  const changed = V3.dirty || V3.annAnim || Math.abs(t - V3.t) > 1e-4;   // annotations pulse even when the video stands still
   if (changed) { V3.t = t; v3Update(t); }
   const moving = v3CamStep(dt, false);
   if (changed || moving) { v3Render(); V3.lastRender = now; }

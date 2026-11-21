@@ -6,7 +6,7 @@
    - quick identity ("this is nine"), goalkeeper recognition, track timeline, next gap / next track end */
 'use strict';
 
-const isPlayerTrack = tk => tk.kind === 'player' || tk.kind === 'other';
+const isPlayerTrack = tk => tk.kind === 'player' || (tk.kind === 'other' && tk.role !== 'staff');   // people outside the pitch are never joined to players
 const visPts = tk => tk.points.filter(p => p.vis === 'v' && p.x != null);
 
 /* ---------------------------------------------------------------- merge / swap */
@@ -208,7 +208,7 @@ function findGoalkeepers() {
   const { L, W } = pitchDims(), out = [];
   const meanX = (team, a, b) => { let s = 0, n = 0; TR.tracks.forEach(tk => { if (tk.team !== team || tk.kind !== 'player') return; for (let t = a; t <= b; t += 1) { const q = posAt(tk, t); if (!q || q.kind === 'status') continue; const m = toPitch(t, q.x, q.y); if (m) { s += m[0]; n++; } } }); return n ? s / n : null; };
   TR.tracks.forEach(tk => {
-    if (tk.kind === 'ball' || tk.kind === 'ref' || tk.playerId || !(tk.kind === 'other' || tk.team === 'Neutral')) return;
+    if (tk.kind === 'ball' || tk.kind === 'ref' || tk.playerId || tk.role === 'staff' || !(tk.kind === 'other' || tk.team === 'Neutral')) return;
     const v = visPts(tk); if (v.length < 5) return;
     const a = v[0].t, b = v[v.length - 1].t;
     let n = 0, inL = 0, inR = 0;
@@ -226,7 +226,7 @@ function applyGoalkeepers(list, quiet) {
   list = list.filter(g => g.team);
   if (!list.length) { if (!quiet) toast('No goalkeeper found (needs a calibration and both teams tracked)', 'info', 3000); return 0; }
   if (!quiet) checkpoint();
-  list.forEach(g => { g.tk.kind = 'player'; g.tk.team = g.team; g.tk.label = 'GK'; g.tk.color = ''; logCorrection(g.tk, g.tk.points[0].t, 'assign', 'goalkeeper ' + teamName(g.team)); });
+  list.forEach(g => { g.tk.kind = 'player'; g.tk.team = g.team; g.tk.label = 'GK'; g.tk.color = ''; g.tk.role = ''; logCorrection(g.tk, g.tk.points[0].t, 'assign', 'goalkeeper ' + teamName(g.team)); });
   if (!quiet) { autosave(); renderTrackTab(); paintTracking(true); toast(list.map(g => 'GK ' + teamName(g.team) + ' (' + g.side + ' goal)').join(', '), 'ok', 3500); }
   return list.length;
 }
@@ -259,6 +259,7 @@ function renderEditorBox() {
   html += `<div class="toolbar">
     <button class="small" id="edEnd" title="Jump to the next place where a player's track stops – check how it continues">⏭ Next track end</button>
     <button class="small" id="edLink" title="Join broken tracks that clearly belong to the same person">🔗 Auto-link broken tracks</button>
+    <button class="small" id="edRoles" title="With the pitch calibration: players only inside the pitch; referee, assistant referees, goalkeepers and people outside the pitch recognised">🧭 Who is who</button>
     <button class="small" id="edGK" title="Find goalkeepers among the 'other' tracks (needs a calibration)">🧤 Find goalkeepers</button>
     <button class="small" id="edLog" title="Every change made by hand to AI data">📝 Corrections (${(TR.log || []).length})</button>
     <label class="small" title="Show where the AI had every corrected point"><input type="checkbox" id="edOrig" ${TR.settings.showOrig ? 'checked' : ''}> show AI originals (${nCorr})</label>
@@ -274,7 +275,7 @@ function renderEditorBox() {
   b('#tkJoin', () => joinTracksDialog()); b('#tkSplit', () => splitTrackHere());
   b('#edSwap', () => swapDialog(tk)); b('#edGap', () => nextGapOf(tk));
   b('#edRestore1', () => restoreAiPoint(tk, t)); b('#edRestoreAll', () => restoreAiTrack(tk));
-  b('#edEnd', nextTrackEnd); b('#edLink', autoLink); b('#edGK', () => applyGoalkeepers(findGoalkeepers()));
+  b('#edEnd', nextTrackEnd); b('#edLink', autoLink); b('#edGK', () => applyGoalkeepers(findGoalkeepers())); b('#edRoles', sortOutRoles);
   b('#edLog', showCorrectionLog);
   const o = box.querySelector('#edOrig'); if (o) o.onchange = e => { TR.settings.showOrig = e.target.checked; paintTracking(true); };
   const tl = box.querySelector('#edTl'); if (tl) tl.onchange = e => { TR.settings.timeline = e.target.checked; renderTrackTab(); };

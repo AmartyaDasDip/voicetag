@@ -61,6 +61,7 @@
       <div id="videoWrap">
         <video id="video" preload="auto"></video>
         <canvas id="trackView" class="hidden"></canvas>
+        <canvas id="annView" class="hidden"></canvas>
         <canvas id="drawView" class="hidden"></canvas>
         <div id="pitch2d" class="hidden"><div class="p2head"><b>2D</b><span class="spacer"></span>
           <select id="p2size" class="small"><option value="s">S</option><option value="m" selected>M</option><option value="l">L</option></select>
@@ -117,6 +118,28 @@
           <button id="drawSave" class="primary" title="Attach this drawing to the selected tag">💾 Save to tag</button>
           <button id="drawClose">✕</button>
         </div>
+        <div id="annBar" class="hidden">
+          <span class="dlbl">✨ Annotate:</span>
+          <button data-ann="spot" title="Spotlight that follows a player (click the player)">🔦 Spotlight</button>
+          <button data-ann="label" title="Name tag that follows a player">🏷 Tag</button>
+          <button data-ann="run" title="Arrow of the run a player makes next (click the player)">➜ Run</button>
+          <button data-ann="link" title="Line between two players with their live distance in metres">↔ Distance</button>
+          <button data-ann="chain" title="Connect several players – a back line, a press, a unit (Enter or ✓ to finish)">〰 Line</button>
+          <button data-ann="zone" title="Drag a zone on the pitch – it stays on the grass while the camera moves">▭ Zone</button>
+          <span class="sep2"></span>
+          <button data-acolor="#ffd23b" class="sw on" style="background:#ffd23b"></button>
+          <button data-acolor="#3ef0ff" class="sw" style="background:#3ef0ff"></button>
+          <button data-acolor="#ff4757" class="sw" style="background:#ff4757"></button>
+          <button data-acolor="#2ecc71" class="sw" style="background:#2ecc71"></button>
+          <button data-acolor="#ffffff" class="sw" style="background:#ffffff"></button>
+          <select id="annDur" class="small" title="How long the new annotation stays"><option value="2">2 s</option><option value="4" selected>4 s</option><option value="6">6 s</option><option value="10">10 s</option><option value="out">to clip OUT</option></select>
+          <button id="annDone" class="hidden primary" title="Finish the line (Enter)">✓</button>
+          <button id="annList" title="Annotations in this video">📋 <span id="annN">0</span></button>
+          <button id="annExport" title="Save the video with the annotations as MP4 (clip IN–OUT, or around the annotations)">🎬</button>
+          <button id="annClose">✕</button>
+          <div id="annHint" class="small"></div>
+          <div id="annPop" class="hidden"></div>
+        </div>
         <div id="textAsk" class="hidden"></div>
       </div>
 
@@ -137,6 +160,7 @@
         </label>
         <button id="btnMute" title="Mute">🔊</button><input type="range" id="volRange" min="0" max="1" step="0.05" value="1" style="width:70px" title="Volume">
         <button id="btnDraw" title="Draw on the video (telestration)">✏</button>
+        <button id="btnAnn" title="Animated annotations that follow the players: spotlight, distance, lines, runs, zones – on the video, in 2D and in 3D">✨</button>
         <button id="btnShot" title="Screenshot (saved in the project's screenshots folder)">📷</button>
         <button id="btnFull" title="Full screen">⛶</button>
         <button id="btn2D" title="2D pitch view of tracked players">🗺 2D</button>
@@ -360,6 +384,8 @@
 <script src="editor.js"></script>
 <script src="shots.js"></script>
 <script src="positions.js"></script>
+<script src="roles.js"></script>
+<script src="annotate.js"></script>
 <script src="view3d.js"></script>
 </body>
 </html>

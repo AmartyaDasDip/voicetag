@@ -94,7 +94,7 @@ async function analyse(o, progress) {
   const zTensor = ballMode === 'zoom' ? new Float32Array(3 * IN_W * IN_H) : null;
   let est = null, zoomHits = 0, zoomOnly = 0, refThumb = null, refCam = [0, 0], camX = 0, camY = 0, prevThumb = null, camSeg = 0, cuts = 0, lastStep = [0, 0];
   const cutFrames = [];
-  const tracker = new Tracker({ maxAge: Math.round(30 / stride), minHits: 3 });
+  const tracker = new Tracker({ maxAge: Math.round(30 / stride), minHits: 3, low: 0.12 });
   const tensorData = new Float32Array(3 * IN_W * IN_H);
   const ballFrames = [], camera = [];
   let k = 0, t0 = Date.now(), dets = 0;
@@ -130,7 +130,8 @@ async function analyse(o, progress) {
         out = await session.run(feeds());
       }
       const o0 = out[session.outputNames[0]];
-      const res = decode(o0, o0.dims[2], { personConf: o.personConf || 0.2, ballConf: o.ballConf || 0.12 });
+      // weak detections (0.12+) only continue existing tracks (tracker 'low' set) – players in an odd pose or half hidden are kept (3.1)
+      const res = decode(o0, o0.dims[2], { personConf: o.personConf || 0.12, ballConf: o.ballConf || 0.12 });
       const people = res.people.filter(d => d.box[3] >= 8 && d.box[3] < h * 0.5 && d.box[1] + d.box[3] <= h + 2 && grassAround(frame, w, h, d.box) >= 0.3);
       people.forEach(d => { d.colour = shirtColour(frame, w, h, d.box); });
       dets += people.length;

@@ -262,3 +262,22 @@ button.chip.cutchip { border-color: #8e44ad; }
 #p3msg,#p3export{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;background:rgba(10,14,20,.82);color:#ffd36b;padding:20px;text-align:center}
 #p3replay{display:flex;align-items:center;gap:6px;margin-top:4px}#p3rSlider{flex:1}
 #updBar{position:fixed;left:50%;transform:translateX(-50%);bottom:12px;z-index:60;background:#163222;border:1px solid #2ecc71;border-radius:8px;padding:7px 10px;display:flex;gap:8px;align-items:center;box-shadow:0 4px 18px rgba(0,0,0,.5)}
+#dlgBody div.warnbox { background: rgba(245,176,65,.1); padding: 8px 10px; border-radius: 4px; margin: 6px 0 10px; line-height: 1.45; }
+.trk.hid .lb { opacity: .55; font-style: italic; }
+
+/* dynamic annotations (3.1) */
+#annView{position:absolute;z-index:5;pointer-events:none}
+#annView.edit{pointer-events:auto;cursor:crosshair}
+#annBar{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);z-index:7;display:flex;flex-wrap:wrap;gap:4px;align-items:center;background:rgba(14,18,23,.95);border:1px solid #ffd23b;border-radius:10px;padding:6px 8px;max-width:96%}
+#annBar button{padding:4px 8px}
+#annBar button.on{background:#ffd23b;color:#14110a;border-color:#ffd23b}
+#annBar .sw{width:20px;height:20px;padding:0;border-radius:50%}
+#annBar .sw.on{outline:2px solid #fff;outline-offset:1px;background-clip:padding-box}
+#annBar .dlbl{font-size:12px;color:#ffd23b;font-weight:600}
+#annHint{flex-basis:100%;color:var(--muted);padding:2px 2px 0}
+#annHint:empty{display:none}
+#annPop{position:absolute;bottom:calc(100% + 6px);right:0;width:360px;max-height:300px;overflow:auto;background:rgba(14,18,23,.98);border:1px solid var(--line,#333);border-radius:8px;padding:6px}
+#annPop .arow{display:flex;gap:6px;align-items:center;padding:3px 2px;border-bottom:1px solid rgba(255,255,255,.06);font-size:12px}
+#annPop .arow .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#annPop .arow .chip{width:10px;height:10px;border-radius:50%;flex:none}
+#btnAnn.on{background:#ffd23b;color:#14110a}
