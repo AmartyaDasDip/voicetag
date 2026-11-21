@@ -204,6 +204,7 @@ async function aiResultDialog(res, opts) {
       <tr><td>🚩 Assistant referees</td><td>${rc('ar')}</td><td class="small muted">on the touchlines – not players</td></tr>
       <tr><td>🚫 Outside the pitch</td><td>${rc('staff')}</td><td class="small muted">coaches, substitutes, ball boys, cameramen – not players</td></tr>
       ${rc('unknown') ? `<tr><td>❔ Not sure</td><td>${rc('unknown')}</td><td class="small muted">inside the pitch, but neither team kit – imported hidden; give them a team with ✎</td></tr>` : ''}
+      ${rc('nocal') ? `<tr><td>📐 No pitch position</td><td>${rc('nocal')}</td><td class="small muted">seen only where the pitch is not calibrated and not a team kit – imported hidden; calibrate that moment and use 🧭 Who is who</td></tr>` : ''}
     </table>` : '';
   const html = `
     <p>Analysed <b>${fmtTime(m.start)} – ${fmtTime(m.start + m.duration)}</b>: ${m.frames} frames in ${aiDur(m.seconds)} (${m.framesPerSecond} frames/s, ${m.provider === 'dml' ? 'graphics card' : 'processor'}, ${esc(m.model)}).</p>
@@ -260,7 +261,7 @@ function aiImport(res, ch) {
   res.tracks.forEach(tr => {
     if (tr.points[tr.points.length - 1].t - tr.points[0].t < ch.min) { n.short++; return; }
     const ro = roles ? roles.get(tr.id) : { role: tr.team === 'A' || tr.team === 'B' ? 'player' : 'unknown', team: tr.team === 'other' ? null : tr.team };
-    const role = ro ? ro.role : 'unknown';
+    const role = ro ? (ro.role === 'nocal' ? 'unknown' : ro.role) : 'unknown';
     const ai = { run, id: tr.id, colour: tr.colour, interrupted: !!tr.interrupted, afterCut: !!tr.afterCut, role, why: ro && ro.why };
     let tk = null;
     if (role === 'player') {

@@ -1,5 +1,58 @@
 # TACTIQ ANALYST – changelog
 
+## 3.2.0 – better-looking, interactive annotations; offside line and back line
+
+### 3D annotations, rebuilt (new `renderer/annotate3d.js`)
+Each annotation is now a set of 3D objects built once and only moved and animated every frame (3.1 rebuilt every
+mesh on every frame):
+- **Spotlight**: a soft cone of light with streaks, a pool of light on the grass, a turning dashed ring, ripples, a
+  bobbing marker above the head – and the player figure itself lights up.
+- **Distance**: an arc of light between the two players with flowing dashes, a glow and rings at both ends; the
+  metres sit at the top of the arc.
+- **Line / back line**: a low wall of light standing on the line, rings at the players and the gaps in metres.
+- **Run**: an arrow of moving chevrons on the grass, the part already run dashed, a target ring where it ends.
+- **Zone**: a lit floor with moving stripes, glowing edges, low light walls and corner posts.
+- **Offside line**: a bright line across the pitch with a light curtain and a light running along it.
+- Labels are drawn sharp and keep the same size on screen at any distance; player names in 3D are drawn at twice
+  the resolution.
+
+### Interactive
+- The annotation tools are a compact **palette on the left of the video** (drag it by its title) instead of a bar
+  over the bottom of the picture.
+- With a tool chosen, the player under the mouse is highlighted with its name.
+- **Click an annotation** (video or 3D) to select it: recolour it with a colour button, **⇤ start here / end here ⇥**,
+  ±1 s, edit its text, delete it (🗑 or Delete); **drag a selected zone** to move it, its corners to resize it.
+- **⏮ ⏭** step through the annotations like slides, for a team talk.
+- In **3D**: point at a figure to see who it is, click it to select the player; with a tool chosen, click figures to
+  make annotations and drag on the grass to draw a zone; click an annotation to select it; double-click the grass to
+  centre the camera there; new camera **Annotations – frames them**.
+
+### New: 📏 offside line and 🛡 back line
+- **Offside line**: click any player of the defending team – the line follows their second-last player every frame
+  (the goalkeeper counts; never past halfway; marked "no GK" when the goalkeeper is not tracked).
+- **Back line**: click any player of a team – its 4 deepest outfield players are connected automatically, with the
+  line's distance from its own goal.
+- Both are drawn on the video (with a light curtain in perspective), in 2D, in 3D and in the MP4.
+
+### Video annotations polished
+Glows and soft shadows, moving chevrons on runs, ground rings in perspective at every player of a line, the distance
+marked ↔, corner brackets and moving stripes on zones, a bobbing marker and light streaks on spotlights.
+
+### Found in the full re-run
+- With 3.1's bottom bar, players in the lower part of the picture could not be clicked (fixed by the palette).
+- The AI results counted tracks that were never on a calibrated part of the pitch as "Not sure"; they now have their
+  own row ("No pitch position").
+- A click in 3D always switched to the free camera; now only a drag does.
+- Checked: the voice engine needs the `unsafe-eval` script permission (its speech model is compiled in the window),
+  so that warning in the developer console stays.
+
+### Tests
+- New end-to-end test (30 checks): palette, hover, offside line checked against an independent calculation, back
+  line, selecting, recolouring, moving and resizing a zone with undo, start/end here, stepping, Delete key, and in 3D
+  building all annotations, the lit player, hover, click-select, picking players and drawing a zone in 3D, selecting
+  in 3D, the Annotations camera, double-click focus, removal.
+- Windows smoke test: annotations in 3D.
+
 ## 3.1.0 – who is who on the pitch, animated annotations
 
 After the feedback on the 3D tracking video (a linesman counted as a player, the referee drawn like a player,

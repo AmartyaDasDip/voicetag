@@ -119,27 +119,37 @@
           <button id="drawClose">✕</button>
         </div>
         <div id="annBar" class="hidden">
-          <span class="dlbl">✨ Annotate:</span>
-          <button data-ann="spot" title="Spotlight that follows a player (click the player)">🔦 Spotlight</button>
-          <button data-ann="label" title="Name tag that follows a player">🏷 Tag</button>
-          <button data-ann="run" title="Arrow of the run a player makes next (click the player)">➜ Run</button>
-          <button data-ann="link" title="Line between two players with their live distance in metres">↔ Distance</button>
-          <button data-ann="chain" title="Connect several players – a back line, a press, a unit (Enter or ✓ to finish)">〰 Line</button>
-          <button data-ann="zone" title="Drag a zone on the pitch – it stays on the grass while the camera moves">▭ Zone</button>
-          <span class="sep2"></span>
-          <button data-acolor="#ffd23b" class="sw on" style="background:#ffd23b"></button>
-          <button data-acolor="#3ef0ff" class="sw" style="background:#3ef0ff"></button>
-          <button data-acolor="#ff4757" class="sw" style="background:#ff4757"></button>
-          <button data-acolor="#2ecc71" class="sw" style="background:#2ecc71"></button>
-          <button data-acolor="#ffffff" class="sw" style="background:#ffffff"></button>
-          <select id="annDur" class="small" title="How long the new annotation stays"><option value="2">2 s</option><option value="4" selected>4 s</option><option value="6">6 s</option><option value="10">10 s</option><option value="out">to clip OUT</option></select>
-          <button id="annDone" class="hidden primary" title="Finish the line (Enter)">✓</button>
-          <button id="annList" title="Annotations in this video">📋 <span id="annN">0</span></button>
-          <button id="annExport" title="Save the video with the annotations as MP4 (clip IN–OUT, or around the annotations)">🎬</button>
-          <button id="annClose">✕</button>
-          <div id="annHint" class="small"></div>
+          <div class="atitle">✨ Annotate</div>
+          <div class="atools">
+            <button data-ann="spot" title="Spotlight that follows a player (click the player)"><span>🔦</span><i>Spotlight</i></button>
+            <button data-ann="label" title="Name tag that follows a player"><span>🏷</span><i>Tag</i></button>
+            <button data-ann="run" title="Arrow of the run a player makes next (click the player)"><span>➜</span><i>Run</i></button>
+            <button data-ann="link" title="Line between two players with their live distance in metres"><span>↔</span><i>Distance</i></button>
+            <button data-ann="chain" title="Connect several players – a back line, a press, a unit (Enter or ✓ to finish)"><span>〰</span><i>Line</i></button>
+            <button data-ann="zone" title="Drag a zone on the pitch – it stays on the grass while the camera moves"><span>▭</span><i>Zone</i></button>
+            <button data-ann="offside" title="Offside line: the second-last player of the defending team, across the pitch – click any player of that team"><span>📏</span><i>Offside</i></button>
+            <button data-ann="backline" title="Back line: the 4 deepest outfield players of a team, connected automatically, with the line's distance from goal"><span>🛡</span><i>Back line</i></button>
+          </div>
+          <div class="acols">
+            <button data-acolor="#ffd23b" class="sw on" style="background:#ffd23b" title="Yellow"></button>
+            <button data-acolor="#3ef0ff" class="sw" style="background:#3ef0ff" title="Cyan"></button>
+            <button data-acolor="#ff4757" class="sw" style="background:#ff4757" title="Red"></button>
+            <button data-acolor="#2ecc71" class="sw" style="background:#2ecc71" title="Green"></button>
+            <button data-acolor="#ff4fd8" class="sw" style="background:#ff4fd8" title="Magenta"></button>
+            <button data-acolor="#ffffff" class="sw" style="background:#ffffff" title="White"></button>
+          </div>
+          <select id="annDur" class="small" title="How long a new annotation stays"><option value="2">2 s</option><option value="4" selected>4 s</option><option value="6">6 s</option><option value="10">10 s</option><option value="out">to OUT</option></select>
+          <div class="aact">
+            <button id="annDone" class="hidden primary" title="Finish the line (Enter)">✓ Done</button>
+            <button id="annPrev" title="Previous annotation (paused, selected) – step through them like slides">⏮</button>
+            <button id="annNext" title="Next annotation (paused, selected)">⏭</button>
+            <button id="annList" title="Annotations in this video">📋 <span id="annN">0</span></button>
+            <button id="annExport" title="Save the video with the annotations as MP4 (clip IN–OUT, or around the annotations)">🎬</button>
+            <button id="annClose" title="Close (Esc)">✕</button>
+          </div>
           <div id="annPop" class="hidden"></div>
         </div>
+        <div id="annInfo" class="hidden"><div id="annSel" class="hidden small"></div><div id="annHint" class="small"></div></div>
         <div id="textAsk" class="hidden"></div>
       </div>
 
@@ -386,6 +396,7 @@
 <script src="positions.js"></script>
 <script src="roles.js"></script>
 <script src="annotate.js"></script>
+<script src="annotate3d.js"></script>
 <script src="view3d.js"></script>
 </body>
 </html>

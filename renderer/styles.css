@@ -268,16 +268,34 @@ button.chip.cutchip { border-color: #8e44ad; }
 /* dynamic annotations (3.1) */
 #annView{position:absolute;z-index:5;pointer-events:none}
 #annView.edit{pointer-events:auto;cursor:crosshair}
-#annBar{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);z-index:7;display:flex;flex-wrap:wrap;gap:4px;align-items:center;background:rgba(14,18,23,.95);border:1px solid #ffd23b;border-radius:10px;padding:6px 8px;max-width:96%}
-#annBar button{padding:4px 8px}
-#annBar button.on{background:#ffd23b;color:#14110a;border-color:#ffd23b}
-#annBar .sw{width:20px;height:20px;padding:0;border-radius:50%}
-#annBar .sw.on{outline:2px solid #fff;outline-offset:1px;background-clip:padding-box}
-#annBar .dlbl{font-size:12px;color:#ffd23b;font-weight:600}
-#annHint{flex-basis:100%;color:var(--muted);padding:2px 2px 0}
-#annHint:empty{display:none}
-#annPop{position:absolute;bottom:calc(100% + 6px);right:0;width:360px;max-height:300px;overflow:auto;background:rgba(14,18,23,.98);border:1px solid var(--line,#333);border-radius:8px;padding:6px}
+#btnAnn.on{background:#ffd23b;color:#14110a}
+#annView.live{pointer-events:auto}
+
+/* annotation palette (3.2): a compact tool panel on the left of the video, hints and the selected annotation below */
+#annBar{position:absolute;left:8px;top:50%;transform:translateY(-50%);z-index:7;width:118px;display:flex;flex-direction:column;gap:6px;background:rgba(12,16,22,.94);border:1px solid rgba(255,210,59,.75);border-radius:12px;padding:7px;box-shadow:0 6px 24px rgba(0,0,0,.45);max-height:calc(100% - 16px);overflow-y:auto}
+#annBar .atitle{font-size:11px;font-weight:700;color:#ffd23b;text-align:center;letter-spacing:.3px;cursor:move;user-select:none;padding:2px 0}
+#annBar .atools{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+#annBar .atools button{display:flex;flex-direction:column;align-items:center;gap:1px;padding:4px 2px;border-radius:8px;min-height:40px}
+#annBar .atools button span{font-size:16px;line-height:18px}
+#annBar .atools button i{font-style:normal;font-size:9.5px;color:var(--muted);white-space:nowrap}
+#annBar .atools button.on{background:#ffd23b;border-color:#ffd23b}
+#annBar .atools button.on i{color:#14110a}
+#annBar .acols{display:grid;grid-template-columns:repeat(6,1fr);gap:3px;justify-items:center}
+#annBar .sw{width:14px;height:14px;padding:0;border-radius:50%;border:1px solid rgba(0,0,0,.4)}
+#annBar .sw.on{outline:2px solid #fff;outline-offset:1px}
+#annBar select{width:100%}
+#annBar .aact{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px}
+#annBar .aact button{padding:4px 2px}
+#annBar #annDone{grid-column:1/-1}
+#annPop{position:fixed;width:360px;max-height:300px;overflow:auto;background:rgba(14,18,23,.98);border:1px solid var(--line,#333);border-radius:8px;padding:6px;z-index:30;box-shadow:0 6px 24px rgba(0,0,0,.5)}
 #annPop .arow{display:flex;gap:6px;align-items:center;padding:3px 2px;border-bottom:1px solid rgba(255,255,255,.06);font-size:12px}
 #annPop .arow .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #annPop .arow .chip{width:10px;height:10px;border-radius:50%;flex:none}
-#btnAnn.on{background:#ffd23b;color:#14110a}
+#annPop .arow.on{background:rgba(255,210,59,.12)}
+#annInfo{position:absolute;left:136px;bottom:10px;z-index:7;max-width:calc(100% - 150px);display:flex;flex-direction:column;gap:4px;pointer-events:none}
+#annInfo>div{background:rgba(12,16,22,.9);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:4px 9px;align-self:flex-start}
+#annInfo #annHint{color:#dfe6ee}
+#annInfo #annHint:empty{display:none}
+#annSel{display:flex;gap:6px;align-items:center;flex-wrap:wrap;pointer-events:auto;border-color:rgba(255,210,59,.6)!important}
+#annSel.hidden{display:none}
+#annSel .chip{width:12px;height:12px;border-radius:50%;display:inline-block}

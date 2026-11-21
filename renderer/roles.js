@@ -71,7 +71,7 @@ function classifyAiTracks(res) {
     // the red team must not become a red player just because red was the nearer of the two)
     const team = ((r.tr.team === 'A' || r.tr.team === 'B') && r.dEng <= 0.085 ? r.tr.team : null) || r.kit;
     const sure = team && kitTeam(r.tr.colour, cl, true) === team;
-    if (s.n < minN) { set(r, team ? 'player' : 'unknown', team, 'no pitch calibration for this track'); return; }
+    if (s.n < minN) { set(r, team ? 'player' : 'nocal', team, 'no pitch calibration for this track'); return; }
     if (s.off / s.n >= 0.6) { outside.push(r); return; }                                   // coaches, subs, cameramen …
     if (sure) { set(r, 'player', team, 'team kit inside the pitch'); return; }
     if (s.band / s.n >= 0.7 && s.deep / s.n <= 0.1) { touch.push(r); return; }             // on one touchline all the time
@@ -155,7 +155,7 @@ function sortOutRoles() {
     points: tk.points.filter(p => p.vis === 'v' && p.x != null) })).filter(t => t.points.length) };
   const roles = classifyAiTracks(res);
   checkpoint();
-  const n = { player: 0, gk: 0, ref: 0, ar: 0, staff: 0, unknown: 0 }, changed = [];
+  const n = { player: 0, gk: 0, ref: 0, ar: 0, staff: 0, unknown: 0, nocal: 0 }, changed = [];
   const gks = [];
   res.tracks.forEach(t => {
     const tk = TR.tracks.find(x => x.id === t.id), ro = roles.get(t.id); if (!tk || !ro) return;
@@ -183,6 +183,6 @@ function sortOutRoles() {
   });
   changed.forEach(tk => logCorrection(tk, tk.points.length ? tk.points[0].t : 0, 'assign', 'who is who: ' + trackRole(tk)));
   markDirty(); autosave(); renderTrackTab(); paintTracking(true); render2D(true);
-  toast(`Who is who: ${n.player + n.gk} player tracks${n.gk ? ` (${n.gk} goalkeeper)` : ''}, ${n.ref ? 'referee' : 'no referee'}, ${n.ar} assistant referee(s), ${n.staff} outside the pitch${n.unknown ? `, ${n.unknown} unsure` : ''} – ${changed.length} changed (Ctrl+Z undoes)`, 'ok', 6000);
+  toast(`Who is who: ${n.player + n.gk} player tracks${n.gk ? ` (${n.gk} goalkeeper)` : ''}, ${n.ref ? 'referee' : 'no referee'}, ${n.ar} assistant referee(s), ${n.staff} outside the pitch${n.unknown + n.nocal ? `, ${n.unknown + n.nocal} unsure` : ''} – ${changed.length} changed (Ctrl+Z undoes)`, 'ok', 6000);
   return { n, changed: changed.length };
 }

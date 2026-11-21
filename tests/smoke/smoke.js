@@ -182,7 +182,9 @@ const step = async (name, fn) => { const t = Date.now(); try { await fn(); } cat
     const a = await h.ev(() => { let tk = TR.tracks.find(t => t.kind === 'player' && t.points.length > 3);
       if (!tk) { tk = newTrack({ team: 'Home', label: 'H1' }); for (let k = 0; k <= 12; k++) tk.points.push({ t: 1 + k * 0.25, x: 0.3 + k * 0.03, y: 0.6, src: 'manual', vis: 'v' }); }
       const t0 = tk.points[0].t;
-      TR.anns = [{ id: 'sm1', type: 'spot', tracks: [tk.id], t0, t1: t0 + 2, color: '#ffd23b', text: 'Smoke' }, { id: 'sm2', type: 'zone', tracks: [], img: [0.2, 0.3, 0.5, 0.6], t0, t1: t0 + 2, color: '#ff4757', text: 'Zone' }]; video.pause(); video.currentTime = t0 + 0.5; return t0; });
+      // a simple pitch calibration, so the annotations have pitch positions (3D)
+      if (!TR.cals.some(c => c.type !== 'none')) { const img = [[0.1, 0.3], [0.9, 0.3], [0.95, 0.95], [0.05, 0.95]], pit = [[20, 10], [85, 10], [85, 60], [20, 60]]; TR.cals.push({ id: 'smk', t: 0, type: 'hom', points: img.map((q, i) => ({ img: q, pitch: pit[i] })), H: solveHomography(img, pit) }); dataChanged(); }
+      TR.anns = [{ id: 'sm1', type: 'spot', tracks: [tk.id], t0, t1: t0 + 2, color: '#ffd23b', text: 'Smoke' }, { id: 'sm2', type: 'zone', tracks: [], zone: [40, 20, 60, 40], t0, t1: t0 + 2, color: '#ff4757', text: 'Zone' }]; video.pause(); video.currentTime = t0 + 0.5; return t0; });
     await h.wait(900);
     check('annotation drawn on the video', a != null && await h.ev(() => !document.querySelector('#annView').classList.contains('hidden') && annActive(video.currentTime).length === 2));
     await h.shot('04-annotations');
@@ -190,6 +192,14 @@ const step = async (name, fn) => { const t = Date.now(); try { await fn(); } cat
     const r = a == null ? null : await h.ev(t0 => annRender(t0, t0 + 1.5, { tags: true, sound: true, size: 720 }).then(x => x && { ok: x.ok, error: x.error }), a);
     const d = fs.existsSync(f) ? probe(f) : 0;
     check('video with annotations saved as MP4', r && r.ok && Math.abs(d - 1.5) < 0.2, JSON.stringify(r) + ' ' + d + ' s');
+    // 3.2: the same annotations as 3D objects (light beam, zone walls) in the 3D view
+    if (a != null) {
+      await h.ev(t0 => { video.currentTime = t0 + 0.5; }, a); await h.wait(500);
+      await page.click('#btn3D'); await h.waitFor(() => V3.open && (V3.gl || V3.failed), 60000); await h.wait(1500);
+      const n3 = await h.ev(() => typeof A3 !== 'undefined' ? [...A3.objs.values()].filter(o => o.g.visible).length : -1);
+      check('annotations drawn in 3D', n3 >= 1, n3); await h.shot('05-annotations-3d');
+      await page.click('#p3close');
+    }
   });
   await step('memory', async () => {
     const mb = await h.app.evaluate(({ app }) => Math.round(app.getAppMetrics().reduce((s, p) => s + p.memory.workingSetSize, 0) / 1024));

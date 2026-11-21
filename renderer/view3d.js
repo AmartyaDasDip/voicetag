@@ -15,7 +15,7 @@ const V3 = {
   cpos: null, ctgt: null, cfov: 40, follow: null, playRaw: null, ballPos: null, selPos: null, orbit: null,
   info: { shown: 0, total: 0, est: 0, msg: '' }, fps: { n: 0, ms: 0 }
 };
-const V3_CAMS = [['broadcast', 'TV camera – follows play'], ['tactical', 'Tactical – whole pitch'], ['top', 'Top-down'], ['goalL', 'Behind the left goal'], ['goalR', 'Behind the right goal'], ['player', 'Player view – selected track'], ['free', 'Free – drag to turn']];
+const V3_CAMS = [['broadcast', 'TV camera – follows play'], ['ann', 'Annotations – frames them'], ['tactical', 'Tactical – whole pitch'], ['top', 'Top-down'], ['goalL', 'Behind the left goal'], ['goalR', 'Behind the right goal'], ['player', 'Player view – selected track'], ['free', 'Free – drag to turn']];
 const V3_NOTE = 'Approximate 3D from 2D tracking – heights, body turn and ball height are not measured';
 
 /* ---------------------------------------------------------------- loading */
@@ -121,13 +121,14 @@ const v3Lum = hex => { const c = new V3.T.Color(hex); return 0.299 * c.r + 0.587
 function v3LabelTex(text, col, sel) {
   const key = text + '|' + col + '|' + (sel ? 1 : 0);
   if (V3.labelTex.has(key)) return V3.labelTex.get(key);
-  const c = document.createElement('canvas'); c.width = 128; c.height = 64;
-  const x = c.getContext('2d'), r = 14;
-  x.fillStyle = col; x.strokeStyle = sel ? '#2ecc71' : 'rgba(0,0,0,.65)'; x.lineWidth = sel ? 8 : 4;
-  x.beginPath(); x.moveTo(r + 4, 4); x.arcTo(124, 4, 124, 60, r); x.arcTo(124, 60, 4, 60, r); x.arcTo(4, 60, 4, 4, r); x.arcTo(4, 4, 124, 4, r); x.closePath(); x.fill(); x.stroke();
-  x.fillStyle = v3Lum(col) > 0.6 ? '#111' : '#fff'; x.font = 'bold 40px Inter, Segoe UI, sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
-  x.fillText(text, 64, 34);
-  const t = new V3.T.CanvasTexture(c); t.colorSpace = V3.T.SRGBColorSpace; t.__shared = true;
+  // drawn at twice the size it is shown, so names stay sharp when the camera comes close (3.2)
+  const c = document.createElement('canvas'); c.width = 256; c.height = 128;
+  const x = c.getContext('2d'), r = 28;
+  x.fillStyle = col; x.strokeStyle = sel ? '#2ecc71' : 'rgba(0,0,0,.65)'; x.lineWidth = sel ? 16 : 8;
+  x.beginPath(); x.moveTo(r + 8, 8); x.arcTo(248, 8, 248, 120, r); x.arcTo(248, 120, 8, 120, r); x.arcTo(8, 120, 8, 8, r); x.arcTo(8, 8, 248, 8, r); x.closePath(); x.fill(); x.stroke();
+  x.fillStyle = v3Lum(col) > 0.6 ? '#111' : '#fff'; x.font = 'bold 80px Inter, Segoe UI, sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.fillText(text, 128, 68);
+  const t = new V3.T.CanvasTexture(c); t.colorSpace = V3.T.SRGBColorSpace; t.__shared = true; t.anisotropy = 4;
   V3.labelTex.set(key, t);
   return t;
 }
@@ -137,7 +138,7 @@ function v3Fig(tk) {
   let f = V3.figs.get(tk.id);
   if (f && f.key === key) return f;
   if (f) { V3.dyn.remove(f.g); v3Dispose(f.g); }
-  const g = new T.Group(), mats = [];
+  const g = new T.Group(), mats = []; g.userData.tkId = tk.id;
   const lam = c => { const m = new T.MeshLambertMaterial({ color: c, transparent: true }); mats.push(m); return m; };
   const shadow = new T.Mesh(V3.geo.shadow, new T.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.32, depthWrite: false }));
   shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.02; mats.push(shadow.material); g.add(shadow);
@@ -292,6 +293,11 @@ function v3EvText(ev, short) {
 function v3Desired() {
   const { L, W } = pitchDims(), f = V3.follow;
   switch (V3.cam) {
+    case 'ann': {      // frames the annotations of this moment from a raised side view (falls back to the TV camera)
+      const b = typeof annWorldBox === 'function' ? annWorldBox(V3.t < 0 ? curT() : V3.t) : null;
+      if (b) { const r = Math.min(60, b.r); return { pos: [b.cx - r * 0.25, 9 + r * 0.9, b.cz + 14 + r * 1.35], tgt: [b.cx, 0, b.cz], fov: 42 }; }
+      const tx = Math.max(-L / 2 + 14, Math.min(L / 2 - 14, f.x)); return { pos: [tx * 0.82, 17, W / 2 + 21], tgt: [tx, 0, Math.max(-10, Math.min(10, f.z * 0.55)) + 1], fov: 36 };
+    }
     case 'tactical': return { pos: [0, 60, W / 2 + 44], tgt: [0, 0, -1], fov: 44 };
     case 'top': return { pos: [0, 100, 0.5], tgt: [0, 0, 0], fov: 44 };
     case 'goalL': return { pos: [-L / 2 - 17, 12, f.z * 0.3], tgt: [-L / 2 + 34, 0, f.z * 0.5], fov: 50 };
@@ -335,14 +341,21 @@ function v3SetCam(name, keepView) {
   V3.dirty = true;
 }
 function v3WireCanvas(cv) {
+  // a short click selects a player or an annotation, a drag turns / moves the camera, a double-click centres there;
+  // with the annotation bar open, clicks pick players and a drag draws a zone on the grass (annotate3d.js)
   let drag = null;
+  const ann = (type, e) => typeof annotate3dPointer === 'function' && annotate3dPointer(type, e, cv);
   cv.addEventListener('pointerdown', e => {
     if (V3.exporting) return;
-    if (V3.cam !== 'free') v3SetCam('free', true);
-    drag = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey }; cv.setPointerCapture(e.pointerId);
+    cv.setPointerCapture(e.pointerId);
+    if (ann('down', e)) { drag = { ann: true }; return; }
+    drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, pan: e.button === 2 || e.shiftKey, button: e.button, moved: false };
   });
   cv.addEventListener('pointermove', e => {
-    if (!drag || !V3.orbit) return;
+    if (!drag) { ann('move', e); return; }
+    if (drag.ann) { ann('drag', e); return; }
+    if (!drag.moved) { if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 4) return; drag.moved = true; if (V3.cam !== 'free') v3SetCam('free', true); cv.style.cursor = 'grabbing'; }
+    if (!V3.orbit) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y, o = V3.orbit; drag.x = e.clientX; drag.y = e.clientY;
     if (drag.pan) {
       const s = o.r * 0.0016, rx = Math.cos(o.theta), rz = -Math.sin(o.theta), fx = -Math.sin(o.theta), fz = -Math.cos(o.theta);
@@ -350,8 +363,20 @@ function v3WireCanvas(cv) {
     } else { o.theta -= dx * 0.006; o.phi = Math.max(0.06, Math.min(1.53, o.phi + dy * 0.005)); }
     V3.dirty = true;
   });
-  const end = () => { drag = null; };
-  cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
+  const end = e => {
+    const d = drag; drag = null; cv.style.cursor = '';
+    if (!d) return;
+    if (d.ann) { ann('up', e); return; }
+    if (!d.moved && d.button === 0) ann('click', e);
+  };
+  cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', () => { drag = null; });
+  cv.addEventListener('pointerleave', () => { if (typeof A3 !== 'undefined' && A3.hover) { A3.hover = null; V3.dirty = true; } });
+  cv.addEventListener('dblclick', e => {
+    if (V3.exporting || typeof a3Ray !== 'function') return;
+    const g = a3Ground(a3Ray(e, cv)); if (!g) return;
+    if (V3.cam !== 'free') v3SetCam('free', true);
+    V3.orbit.tgt.set(g.x, 0, g.z); V3.orbit.r = Math.min(V3.orbit.r, 38); V3.dirty = true;
+  });
   cv.addEventListener('wheel', e => { e.preventDefault(); if (V3.exporting) return; if (V3.cam !== 'free') v3SetCam('free', true); V3.orbit.r = Math.max(4, Math.min(230, V3.orbit.r * Math.pow(1.0012, e.deltaY))); V3.dirty = true; }, { passive: false });
   cv.addEventListener('contextmenu', e => e.preventDefault());
 }
@@ -387,6 +412,7 @@ function v3DrawHud(x, w, h, t, forExport) {
 function v3PaintHud() {
   const c = $('#p3hud'), x = c.getContext('2d'); x.clearRect(0, 0, c.width, c.height);
   v3DrawHud(x, c.width, c.height, V3.t, false);
+  if (typeof annotate3dHud === 'function') annotate3dHud(x, c.width, c.height);
   const i = V3.info;
   $('#p3info').textContent = `${i.shown}/${i.total} players placed${i.est ? ` (${i.est} estimated – faded)` : ''} · ${fmtTime(V3.t)}${V3.mode === 'replay' ? ' · replay' : ''}`;
 }
@@ -404,7 +430,8 @@ function v3Loop(now) {
     if (r.playing) { r.t += dt * r.speed; if (r.t >= r.t1) { if (r.loop) r.t = r.t0; else { r.t = r.t1; r.playing = false; } } v3ReplayUi(); }
     t = r.t;
   } else t = curT();
-  const changed = V3.dirty || V3.annAnim || Math.abs(t - V3.t) > 1e-4;   // annotations pulse even when the video stands still
+  // annotations keep moving even when the video stands still – at most 30 frames a second for that alone
+  const changed = V3.dirty || (V3.annAnim && now - V3.lastRender >= 33) || Math.abs(t - V3.t) > 1e-4;
   if (changed) { V3.t = t; v3Update(t); }
   const moving = v3CamStep(dt, false);
   if (changed || moving) { v3Render(); V3.lastRender = now; }

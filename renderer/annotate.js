@@ -1,8 +1,11 @@
-/* TACTIQ ANALYST – dynamic annotations (3.1).
+/* TACTIQ ANALYST – dynamic annotations (3.1, redrawn and made interactive in 3.2).
    Telestration that is tied to the tracking data, so it moves with the players and stays on the grass while the
-   camera pans:  🔦 spotlight · 🏷 name tag · ➜ run arrow · ↔ distance (live metres) · 〰 line through players · ▭ zone.
-   Each annotation lives from t0 to t1 (fades in and out) and is drawn on the video, on the 2D pitch, in the 3D view,
-   and burnt into an MP4 with 🎬.  Stored in TR.anns: { id, type, tracks:[ids], t0, t1, color, text, zone:[x0,y0,x1,y1] } */
+   camera pans:  🔦 spotlight · 🏷 name tag · ➜ run arrow · ↔ distance (live metres) · 〰 line through players · ▭ zone
+   · 📏 offside line · 🛡 back line (both found automatically from a team's players, every frame).
+   Each annotation lives from t0 to t1 (fades in and out) and is drawn on the video, on the 2D pitch, in the 3D view
+   (annotate3d.js) and burnt into an MP4 with 🎬. Click one to select it: recolour, longer / shorter, delete, and
+   drag a zone to move it or its corners to resize it.
+   Stored in TR.anns: { id, type, tracks:[ids], team, t0, t1, color, text, zone:[x0,y0,x1,y1], fill } */
 'use strict';
 
 const ANN_TYPES = {
@@ -11,11 +14,14 @@ const ANN_TYPES = {
   run: { name: 'Run', icon: '➜', picks: 1, hint: 'Click a player – the arrow shows the run they make in the next seconds.' },
   link: { name: 'Distance', icon: '↔', picks: 2, hint: 'Click two players – the line shows their distance live, in metres.' },
   chain: { name: 'Line', icon: '〰', picks: 99, hint: 'Click the players of the line one after another, then Enter (or ✓).' },
-  zone: { name: 'Zone', icon: '▭', picks: 0, hint: 'Drag a rectangle on the pitch – it stays on the grass when the camera moves.' }
+  zone: { name: 'Zone', icon: '▭', picks: 0, hint: 'Drag a rectangle on the pitch – it stays on the grass when the camera moves.' },
+  offside: { name: 'Offside line', icon: '📏', picks: 1, hint: 'Click any player of the DEFENDING team – the line follows their second-last player (needs the pitch calibration).' },
+  backline: { name: 'Back line', icon: '🛡', picks: 1, hint: 'Click any player of a team – its last line (the 4 deepest outfield players) is connected automatically, with its height.' }
 };
-const Ann = { on: false, tool: null, color: '#ffd23b', picks: [], drag: null, raf: 0, exporting: null };
+const Ann = { on: false, tool: null, color: '#ffd23b', picks: [], drag: null, raf: 0, exporting: null, sel: null, hover: null, hits: [], edit: null, cursor: null };
 const annView = $('#annView');
 const FADE = 0.35;
+const ANN_TEAM_TYPES = new Set(['offside', 'backline']);
 
 /* ---------------------------------------------------------------- timing */
 // While the video stands still (making or checking annotations) they are shown complete; while it plays, in a
@@ -28,10 +34,11 @@ function annAlpha(a, t) {
 }
 const annGrow = (a, t, s = 0.7) => annStill() ? 1 : clamp((t - a.t0) / s, 0, 1);
 const annActive = t => (TR.anns || []).filter(a => annAlpha(a, t) > 0);
-// clock for the pulsing effects: video time while playing / exporting (frame-exact), wall clock while paused
+// clock for the moving effects: video time while playing / exporting (frame-exact), wall clock while paused
 const annClock = t => Ann.exporting || !hasVideo() || !video.paused ? t : performance.now() / 1000;
 const annTrack = id => TR.tracks.find(x => x.id === id);
-const annName = a => a.type === 'zone' ? (a.text || 'Zone') : a.tracks.map(id => { const tk = annTrack(id); return tk ? trackLabel(tk) : '?'; }).join(' – ');
+const annTeamName = a => a.team ? teamName(a.team) : '?';
+const annName = a => a.type === 'zone' ? (a.text || 'Zone') : ANN_TEAM_TYPES.has(a.type) ? `${ANN_TYPES[a.type].name} – ${annTeamName(a)}` : a.tracks.map(id => { const tk = annTrack(id); return tk ? trackLabel(tk) : '?'; }).join(' – ');
 
 /* ---------------------------------------------------------------- geometry: image ↔ pitch */
 // a calibration for time t with its inverse (pitch → image); null without calibration
@@ -60,7 +67,7 @@ function annScale(g, p, W, H) {
   return clamp(Math.max(Math.hypot((b[0] - a[0]) * W, (b[1] - a[1]) * H), Math.hypot((c[0] - a[0]) * W, (c[1] - a[1]) * H)), W / 400, W / 25);
 }
 // circle of radius R metres around a pitch point, as a polygon on the picture
-function annRing(g, p, R, W, H, n = 28) {
+function annRing(g, p, R, W, H, n = 32) {
   if (g && p.m) {
     const out = [];
     for (let k = 0; k < n; k++) { const a = k / n * Math.PI * 2, q = annImg(g, p.m[0] + Math.cos(a) * R, p.m[1] + Math.sin(a) * R); if (!q) return null; out.push([q[0] * W, q[1] * H]); }
@@ -70,16 +77,21 @@ function annRing(g, p, R, W, H, n = 28) {
   for (let k = 0; k < n; k++) { const a = k / n * Math.PI * 2; out.push([p.x * W + Math.cos(a) * rx, p.y * H + Math.sin(a) * ry]); }
   return out;
 }
-const polyPath = (ctx, P) => { ctx.beginPath(); P.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); };
-const hexA = (hex, a) => { const m = /^#?([0-9a-f]{6})$/i.exec(hex || '') ; const v = m ? parseInt(m[1], 16) : 0xffd23b; return `rgba(${v >> 16 & 255},${v >> 8 & 255},${v & 255},${a})`; };
+const polyPath = (ctx, P, open) => { ctx.beginPath(); P.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); if (!open) ctx.closePath(); };
+const hexA = (hex, a) => { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''); const v = m ? parseInt(m[1], 16) : 0xffd23b; return `rgba(${v >> 16 & 255},${v >> 8 & 255},${v & 255},${a})`; };
+function roundRect(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+// a label pill with a soft shadow; returns its box (for clicking)
 function annPill(ctx, x, y, text, col, fs, dark = true) {
+  ctx.save();
   ctx.font = `700 ${fs}px Inter, "Segoe UI", Arial, sans-serif`;
-  const w = ctx.measureText(text).width + fs * 0.9, h = fs * 1.45, r = h / 2;
-  ctx.beginPath(); ctx.moveTo(x - w / 2 + r, y - h / 2); ctx.arcTo(x + w / 2, y - h / 2, x + w / 2, y + h / 2, r); ctx.arcTo(x + w / 2, y + h / 2, x - w / 2, y + h / 2, r);
-  ctx.arcTo(x - w / 2, y + h / 2, x - w / 2, y - h / 2, r); ctx.arcTo(x - w / 2, y - h / 2, x + w / 2, y - h / 2, r); ctx.closePath();
-  ctx.fillStyle = dark ? 'rgba(8,12,16,.86)' : col; ctx.fill(); ctx.lineWidth = Math.max(1.5, fs * 0.1); ctx.strokeStyle = col; ctx.stroke();
+  const w = ctx.measureText(text).width + fs * 1.0, h = fs * 1.5;
+  roundRect(ctx, x - w / 2, y - h / 2, w, h, h / 2);
+  ctx.shadowColor = 'rgba(0,0,0,.55)'; ctx.shadowBlur = fs * 0.6; ctx.shadowOffsetY = fs * 0.12;
+  ctx.fillStyle = dark ? 'rgba(10,14,20,.88)' : col; ctx.fill();
+  ctx.shadowColor = 'transparent'; ctx.lineWidth = Math.max(1.5, fs * 0.1); ctx.strokeStyle = col; ctx.stroke();
   ctx.fillStyle = dark ? col : '#111'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, x, y + fs * 0.04);
-  return w;
+  ctx.restore();
+  return { x: x - w / 2, y: y - h / 2, w, h };
 }
 function annArrowHead(ctx, x1, y1, x2, y2, size, col) {
   const a = Math.atan2(y2 - y1, x2 - x1);
@@ -98,126 +110,300 @@ function annRunPath(a) {
   const avg = (k, f) => { let n = 0, v = 0; for (let j = Math.max(0, k - 3); j <= Math.min(pts.length - 1, k + 3); j++) { const x = f(pts[j]); if (x != null) { v += x; n++; } } return n ? v / n : null; };
   return pts.map((q, k) => ({ s: q.s, x: avg(k, o => o.x), y: avg(k, o => o.y), m: q.m ? [avg(k, o => o.m && o.m[0]), avg(k, o => o.m && o.m[1])] : null }));
 }
+// points along a polyline (pixels) every `gap` px, with their direction – for chevrons and dashes
+function annAlong(P, gap, offset) {
+  const out = []; let acc = -((offset % gap) + gap) % gap;
+  for (let k = 1; k < P.length; k++) {
+    const [x0, y0] = P[k - 1], [x1, y1] = P[k], L = Math.hypot(x1 - x0, y1 - y0); if (L < 1e-6) continue;
+    for (let d = gap - acc; d <= L; d += gap) out.push({ x: x0 + (x1 - x0) * d / L, y: y0 + (y1 - y0) * d / L, a: Math.atan2(y1 - y0, x1 - x0) });
+    acc = (acc + L) % gap;
+  }
+  return out;
+}
+
+/* ---------------------------------------------------------------- team lines (offside line, back line) */
+// which goal a team defends at time t: where its goalkeeper is, otherwise from both teams' average positions
+function annOwnGoal(team, t) {
+  const { L } = pitchDims();
+  const gk = TR.tracks.find(tk => tk.kind === 'player' && tk.team === team && isKeeper(tk) && annPos(tk, t) && annPos(tk, t).m);
+  if (gk) return annPos(gk, t).m[0] < L / 2 ? 0 : L;
+  const m = typeof teamSideMeans === 'function' ? teamSideMeans(t - 8, t + 8) : {};
+  const other = team === 'Home' ? 'Away' : 'Home';
+  if (m[team] != null && m[other] != null) return m[team] < m[other] ? 0 : L;
+  if (m[team] != null) return m[team] < L / 2 ? 0 : L;
+  return 0;
+}
+// the players of a team on the pitch at t, deepest (nearest their own goal) first
+function annTeamDepth(team, t) {
+  const goal = annOwnGoal(team, t), out = [];
+  TR.tracks.forEach(tk => {
+    if (tk.kind !== 'player' || tk.team !== team) return;
+    const p = annPos(tk, t); if (!p || !p.m) return;
+    out.push({ tk, p, gk: isKeeper(tk), depth: Math.abs(p.m[0] - goal) });
+  });
+  return { goal, list: out.sort((a, b) => a.depth - b.depth) };
+}
+// offside line: x of the second-last player of the defending team (the goalkeeper counts), never past halfway
+function annOffside(a, t) {
+  const { L } = pitchDims(), d = annTeamDepth(a.team, t);
+  if (!d.list.length) return null;
+  const hasGk = d.list.some(o => o.gk), k = hasGk ? 1 : 0, o = d.list[Math.min(k, d.list.length - 1)];
+  let x = o.p.m[0];
+  x = d.goal === 0 ? Math.min(x, L / 2) : Math.max(x, L / 2);
+  return { x, by: o.tk, goal: d.goal, approx: !hasGk };
+}
+// back line: the 4 deepest outfield players, ordered across the pitch; height = distance of the line from its own goal
+function annBackLine(a, t) {
+  const d = annTeamDepth(a.team, t), four = d.list.filter(o => !o.gk).slice(0, 4);
+  if (four.length < 2) return null;
+  four.sort((u, v) => u.p.m[1] - v.p.m[1]);
+  const height = four.reduce((s, o) => s + o.depth, 0) / four.length;
+  return { nodes: four, height, goal: d.goal };
+}
 
 /* ---------------------------------------------------------------- drawing on the video */
-function drawAnnotations(ctx, W, H, t) {
+// opts.hits (only for the live overlay): clickable areas of each annotation, for selecting and editing
+function drawAnnotations(ctx, W, H, t, opts = {}) {
   const list = annActive(t); if (!list.length) return 0;
   const g = annGeo(t), clk = annClock(t), fs = Math.max(11, Math.round(H * 0.026)), lw = Math.max(2, W * 0.0028);
-  // zones first (under everything), then lines, then spotlights and tags on top
-  const order = { zone: 0, chain: 1, link: 2, run: 3, spot: 4, label: 5 };
+  const order = { zone: 0, offside: 1, chain: 2, backline: 2, link: 3, run: 4, spot: 5, label: 6 };
   list.slice().sort((a, b) => order[a.type] - order[b.type]).forEach(a => {
-    const al = annAlpha(a, t), col = a.color || '#ffd23b';
+    const al = annAlpha(a, t), col = a.color || '#ffd23b', hit = opts.hits ? { id: a.id, shapes: [] } : null;
     ctx.save(); ctx.globalAlpha = al; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     try {
-      if (a.type === 'zone') annZone2d(ctx, a, g, W, H, clk, col, fs, lw);
-      else if (a.type === 'run') annRun2d(ctx, a, g, W, H, t, col, lw);
-      else if (a.type === 'link' || a.type === 'chain') annLinks2d(ctx, a, g, W, H, t, clk, col, fs, lw);
-      else { const tk = annTrack(a.tracks[0]), p = annPos(tk, t); if (p) a.type === 'spot' ? annSpot2d(ctx, a, tk, p, g, W, H, t, clk, col, fs, lw) : annTag2d(ctx, a, tk, p, g, W, H, t, col, fs); }
+      const S = { ctx, a, g, W, H, t, clk, col, fs, lw, hit };
+      if (a.type === 'zone') annZone2d(S);
+      else if (a.type === 'run') annRun2d(S);
+      else if (a.type === 'link' || a.type === 'chain') annLinks2d(S);
+      else if (a.type === 'offside') annOffside2d(S);
+      else if (a.type === 'backline') annBack2d(S);
+      else { const tk = annTrack(a.tracks[0]), p = annPos(tk, t); if (p) { S.tk = tk; S.p = p; a.type === 'spot' ? annSpot2d(S) : annTag2d(S); } }
     } catch (e) { /* one broken annotation must not stop the others */ }
     ctx.restore();
+    if (hit && hit.shapes.length) opts.hits.push(hit);
+    if (opts.sel === a.id && hit) annSelOutline(ctx, hit, W, lw);
   });
   return list.length;
 }
-function annSpot2d(ctx, a, tk, p, g, W, H, t, clk, col, fs, lw) {
+// the white dashed outline of the selected annotation, with handles on a zone
+function annSelOutline(ctx, hit, W, lw) {
+  ctx.save(); ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(1.5, lw * 0.8); ctx.setLineDash([lw * 3, lw * 2]); ctx.shadowColor = 'rgba(0,0,0,.8)'; ctx.shadowBlur = 4;
+  hit.shapes.forEach(s => {
+    if (s.k === 'poly') { polyPath(ctx, s.P, s.open); ctx.stroke(); }
+    else if (s.k === 'circle') { ctx.beginPath(); ctx.arc(s.x, s.y, s.r + lw * 2, 0, Math.PI * 2); ctx.stroke(); }
+    else if (s.k === 'rect') { ctx.strokeRect(s.x - 3, s.y - 3, s.w + 6, s.h + 6); }
+  });
+  ctx.setLineDash([]);
+  (hit.handles || []).forEach(([x, y]) => { ctx.fillStyle = '#fff'; ctx.fillRect(x - lw * 2.2, y - lw * 2.2, lw * 4.4, lw * 4.4); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.strokeRect(x - lw * 2.2, y - lw * 2.2, lw * 4.4, lw * 4.4); });
+  ctx.restore();
+}
+// a glowing ground ring in perspective
+function annGroundRing(S, p, R, width, alpha = 1) {
+  const { ctx, g, W, H, col } = S, ring = annRing(g, p, R, W, H); if (!ring) return null;
+  ctx.save(); polyPath(ctx, ring); ctx.globalAlpha *= alpha; ctx.lineWidth = width; ctx.strokeStyle = col; ctx.shadowColor = hexA(col, 0.9); ctx.shadowBlur = width * 2.5; ctx.stroke(); ctx.restore();
+  return ring;
+}
+function annSpot2d(S) {
+  const { ctx, a, g, W, H, t, clk, col, fs, lw, p, hit } = S;
   const ppm = annScale(g, p, W, H), body = ppm * 1.9, x = p.x * W, y = p.y * H, gr = annGrow(a, t, 0.5);
   const R = 1.15 * (0.6 + 0.4 * gr), ring = annRing(g, p, R, W, H); if (!ring) return;
-  // light beam from above
-  const bw = ppm * R * 1.5, top = y - body * 2.6;
+  // light beam from above, with a few brighter streaks
+  const bw = ppm * R * 1.5, top = y - body * 2.8;
   const lg = ctx.createLinearGradient(0, top, 0, y);
-  lg.addColorStop(0, hexA(col, 0)); lg.addColorStop(0.55, hexA(col, 0.16)); lg.addColorStop(1, hexA(col, 0.38));
-  ctx.beginPath(); ctx.moveTo(x - bw * 0.55, top); ctx.lineTo(x + bw * 0.55, top); ctx.lineTo(x + bw, y); ctx.lineTo(x - bw, y); ctx.closePath();
-  ctx.fillStyle = lg; ctx.fill();
-  // glowing disc on the grass
+  lg.addColorStop(0, hexA(col, 0)); lg.addColorStop(0.55, hexA(col, 0.15)); lg.addColorStop(1, hexA(col, 0.4));
+  ctx.beginPath(); ctx.moveTo(x - bw * 0.5, top); ctx.lineTo(x + bw * 0.5, top); ctx.lineTo(x + bw, y); ctx.lineTo(x - bw, y); ctx.closePath(); ctx.fillStyle = lg; ctx.fill();
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  [-0.55, 0, 0.5].forEach((f, i) => { const s = ctx.createLinearGradient(0, top, 0, y); s.addColorStop(0, hexA(col, 0)); s.addColorStop(1, hexA(col, 0.18 + 0.06 * Math.sin(clk * 2 + i))); ctx.beginPath(); ctx.moveTo(x + f * bw * 0.5, top); ctx.lineTo(x + f * bw, y); ctx.lineWidth = lw * 1.2; ctx.strokeStyle = s; ctx.stroke(); });
+  ctx.restore();
+  // pool of light on the grass
   const rg = ctx.createRadialGradient(x, y, 0, x, y, bw);
-  rg.addColorStop(0, hexA(col, 0.55)); rg.addColorStop(0.7, hexA(col, 0.25)); rg.addColorStop(1, hexA(col, 0.08));
+  rg.addColorStop(0, hexA(col, 0.6)); rg.addColorStop(0.65, hexA(col, 0.25)); rg.addColorStop(1, hexA(col, 0.06));
   polyPath(ctx, ring); ctx.fillStyle = rg; ctx.fill();
-  ctx.shadowColor = hexA(col, 0.9); ctx.shadowBlur = lw * 4; ctx.lineWidth = lw * 1.4; ctx.strokeStyle = col; ctx.stroke(); ctx.shadowBlur = 0;
-  // ripples
+  annGroundRing(S, p, R, lw * 1.5);
+  // turning dashed outer ring
+  const outer = annRing(g, p, R * 1.45, W, H, 48);
+  if (outer) { ctx.save(); polyPath(ctx, outer); ctx.setLineDash([lw * 3, lw * 2.2]); ctx.lineDashOffset = -clk * lw * 14; ctx.lineWidth = lw; ctx.strokeStyle = hexA(col, 0.85); ctx.stroke(); ctx.restore(); }
   for (let k = 0; k < 2; k++) {
-    const ph = ((clk * 0.9) + k * 0.5) % 1, rp = annRing(g, p, R * (1 + ph * 1.1), W, H);
-    if (rp) { polyPath(ctx, rp); ctx.lineWidth = lw * (1.2 - ph * 0.8); ctx.strokeStyle = hexA(col, (1 - ph) * 0.8); ctx.stroke(); }
+    const ph = ((clk * 0.9) + k * 0.5) % 1, rp = annRing(g, p, R * (1 + ph * 1.2), W, H);
+    if (rp) { polyPath(ctx, rp); ctx.lineWidth = lw * (1.2 - ph * 0.8); ctx.strokeStyle = hexA(col, (1 - ph) * 0.7); ctx.stroke(); }
   }
-  if (a.text) annPill(ctx, x, top + fs * 0.2, a.text, col, fs);
+  // a little marker bobbing above the head
+  const head = y - body - fs * 0.6 - Math.abs(Math.sin(clk * 3.2)) * fs * 0.45, cs = fs * 0.55;
+  ctx.save(); ctx.beginPath(); ctx.moveTo(x - cs, head - cs * 1.1); ctx.lineTo(x + cs, head - cs * 1.1); ctx.lineTo(x, head); ctx.closePath();
+  ctx.fillStyle = col; ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 4; ctx.fill(); ctx.restore();
+  let box = null;
+  if (a.text) box = annPill(ctx, x, head - cs * 1.1 - fs * 1.1, a.text, col, fs);
+  if (hit) { hit.shapes.push({ k: 'poly', P: ring }); hit.shapes.push({ k: 'rect', x: x - bw * 0.6, y: top + (y - top) * 0.45, w: bw * 1.2, h: (y - top) * 0.55 }); if (box) hit.shapes.push(Object.assign({ k: 'rect' }, box)); }
 }
-function annTag2d(ctx, a, tk, p, g, W, H, t, col, fs) {
+function annTag2d(S) {
+  const { ctx, a, g, W, H, t, col, fs, tk, p, hit } = S;
   const ppm = annScale(g, p, W, H), x = p.x * W, head = p.y * H - ppm * 1.95, gr = annGrow(a, t, 0.4);
-  const text = (a.text || trackLabel(tk)), ty = head - fs * 1.6 - (1 - gr) * fs;
-  ctx.beginPath(); ctx.moveTo(x, head - fs * 0.15); ctx.lineTo(x - fs * 0.35, ty + fs * 0.6); ctx.lineTo(x + fs * 0.35, ty + fs * 0.6); ctx.closePath(); ctx.fillStyle = col; ctx.fill();
+  const text = (a.text || trackLabel(tk)), ty = head - fs * 1.7 - (1 - gr) * fs;
+  ctx.save(); ctx.strokeStyle = col; ctx.lineWidth = Math.max(1.5, fs * 0.09); ctx.beginPath(); ctx.moveTo(x, head - fs * 0.1); ctx.lineTo(x, ty + fs * 0.8); ctx.stroke();
+  ctx.beginPath(); ctx.arc(x, head - fs * 0.1, fs * 0.16, 0, Math.PI * 2); ctx.fillStyle = col; ctx.fill(); ctx.restore();
   const team = tk.kind === 'player' ? teamColor(tk.team) : '#888';
-  ctx.font = `700 ${fs}px Inter, "Segoe UI", Arial, sans-serif`;
-  const w = ctx.measureText(text).width + fs * 1.4, h = fs * 1.6;
-  ctx.fillStyle = 'rgba(8,12,16,.9)'; ctx.fillRect(x - w / 2, ty - h / 2, w, h);
-  ctx.fillStyle = team; ctx.fillRect(x - w / 2, ty - h / 2, fs * 0.35, h);
-  ctx.lineWidth = Math.max(1.5, fs * 0.09); ctx.strokeStyle = col; ctx.strokeRect(x - w / 2, ty - h / 2, w, h);
-  ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, x + fs * 0.18, ty + fs * 0.05);
+  ctx.save(); ctx.font = `700 ${fs}px Inter, "Segoe UI", Arial, sans-serif`;
+  const w = ctx.measureText(text).width + fs * 1.5, h = fs * 1.65, bx = x - w / 2, by = ty - h / 2;
+  roundRect(ctx, bx, by, w, h, fs * 0.3); ctx.shadowColor = 'rgba(0,0,0,.55)'; ctx.shadowBlur = fs * 0.6; ctx.shadowOffsetY = fs * 0.12;
+  ctx.fillStyle = 'rgba(10,14,20,.92)'; ctx.fill(); ctx.shadowColor = 'transparent';
+  ctx.save(); roundRect(ctx, bx, by, w, h, fs * 0.3); ctx.clip(); ctx.fillStyle = team; ctx.fillRect(bx, by, fs * 0.38, h); ctx.restore();
+  roundRect(ctx, bx, by, w, h, fs * 0.3); ctx.lineWidth = Math.max(1.5, fs * 0.09); ctx.strokeStyle = col; ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, x + fs * 0.2, ty + fs * 0.05); ctx.restore();
+  if (hit) hit.shapes.push({ k: 'rect', x: bx, y: by, w, h: head - by });
 }
-function annRun2d(ctx, a, g, W, H, t, col, lw) {
+function annRun2d(S) {
+  const { ctx, a, g, W, H, t, clk, col, lw, hit } = S;
   const path = annRunPath(a); if (!path) return;
   // the path is kept on the grass: pitch metres projected with the calibration of THIS frame
   const P = path.map(q => g && q.m ? annImg(g, q.m[0], q.m[1]) : [q.x, q.y]).filter(Boolean).map(q => [q[0] * W, q[1] * H]);
   if (P.length < 2) return;
   const gr = annGrow(a, t, Math.min(1, (a.t1 - a.t0) * 0.35)), n = Math.max(2, Math.ceil(P.length * gr));
   const done = clamp(Math.round((t - a.t0) / Math.max(0.01, a.t1 - a.t0) * (P.length - 1)), 0, P.length - 1);
-  const draw = (pts, width, style, dash) => { ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.lineWidth = width; ctx.strokeStyle = style; ctx.setLineDash(dash || []); ctx.stroke(); ctx.setLineDash([]); };
-  const vis = P.slice(0, n);
+  const draw = (pts, width, style, dash) => { if (pts.length < 2) return; polyPath(ctx, pts, true); ctx.lineWidth = width; ctx.strokeStyle = style; ctx.setLineDash(dash || []); ctx.stroke(); ctx.setLineDash([]); };
+  const vis = P.slice(0, n), rest = vis.slice(done);
   draw(vis, lw * 3, 'rgba(0,0,0,.35)');
-  draw(vis.slice(0, done + 1), lw * 1.6, hexA(col, 0.5), [lw * 2, lw * 2]);         // already run: dashed
-  draw(vis.slice(done), lw * 1.9, col);                                               // still to run: solid
-  // arrow head in proportion to the run (a short run gets a small head, a standing player a dot)
+  draw(vis.slice(0, done + 1), lw * 1.5, hexA(col, 0.45), [lw * 2, lw * 2]);       // already run: dashed
+  ctx.save(); ctx.shadowColor = hexA(col, 0.8); ctx.shadowBlur = lw * 3; draw(rest, lw * 2.2, hexA(col, 0.55)); ctx.restore();
+  // chevrons moving along the run
+  if (rest.length > 1) {
+    ctx.save(); ctx.fillStyle = col;
+    annAlong(rest, lw * 9, clk * lw * 22).forEach(c => { const s = lw * 2.2; ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.a); ctx.beginPath(); ctx.moveTo(s * 0.9, 0); ctx.lineTo(-s * 0.6, -s); ctx.lineTo(-s * 0.1, 0); ctx.lineTo(-s * 0.6, s); ctx.closePath(); ctx.fill(); ctx.restore(); });
+    ctx.restore();
+  }
+  // arrow head in proportion to the run; a target ring where the run ends
   let len = 0; for (let k = 1; k < vis.length; k++) len += Math.hypot(vis[k][0] - vis[k - 1][0], vis[k][1] - vis[k - 1][1]);
   const e = vis[vis.length - 1]; let b = vis[vis.length - 1];
   for (let k = vis.length - 2; k >= 0; k--) { b = vis[k]; if (Math.hypot(e[0] - b[0], e[1] - b[1]) > lw * 3) break; }
   if (len > lw * 4 && Math.hypot(e[0] - b[0], e[1] - b[1]) > 1) annArrowHead(ctx, b[0], b[1], e[0], e[1], clamp(len * 0.25, lw * 2.5, lw * 5.5), col);
   else { ctx.beginPath(); ctx.arc(e[0], e[1], lw * 2.2, 0, Math.PI * 2); ctx.fillStyle = col; ctx.fill(); }
+  const last = path[n - 1];
+  if (gr >= 1 && last && last.m && g) { const ph = (clk * 0.8) % 1; annGroundRing(S, { m: last.m, x: last.x, y: last.y }, 0.7 + ph * 0.5, lw * 0.9, 1 - ph * 0.7); }
+  if (hit) hit.shapes.push({ k: 'poly', P: vis, open: true, line: true });
 }
-function annLinks2d(ctx, a, g, W, H, t, clk, col, fs, lw) {
-  const ps = a.tracks.map(id => annPos(annTrack(id), t));
-  const nodes = ps.map((p, i) => p ? { p, x: p.x * W, y: p.y * H, i } : null).filter(Boolean);
+function annLinks2d(S) {
+  const { ctx, a, g, W, H, t, clk, col, fs, lw, hit } = S;
+  const nodes = a.tracks.map(id => annPos(annTrack(id), t)).filter(Boolean).map(p => ({ p, x: p.x * W, y: p.y * H }));
   if (nodes.length < 2) return;
+  annLines2d(S, nodes, a.type === 'chain' && a.fill, a.type === 'link' ? 'link' : 'chain');
+}
+// lines between players (distance, line, back line): glow, flowing dashes, ground rings, gaps in metres
+function annLines2d(S, nodes, fill, style) {
+  const { ctx, a, t, clk, col, fs, lw, hit } = S;
   const gr = annGrow(a, t, 0.6);
-  if (a.type === 'chain' && a.fill && nodes.length >= 3) { polyPath(ctx, nodes.map(n => [n.x, n.y])); ctx.fillStyle = hexA(col, 0.16 * gr); ctx.fill(); }
+  if (fill && nodes.length >= 3) { polyPath(ctx, nodes.map(n => [n.x, n.y])); ctx.fillStyle = hexA(col, 0.17 * gr); ctx.fill(); }
+  nodes.forEach(n => { if (n.p.m) annGroundRing(S, n.p, 0.75, lw * 1.1, 0.9); });
+  const pills = [];
   for (let k = 0; k + 1 < nodes.length; k++) {
     const A = nodes[k], B = nodes[k + 1], ex = A.x + (B.x - A.x) * gr, ey = A.y + (B.y - A.y) * gr;
-    ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(ex, ey); ctx.lineWidth = lw * 3.6; ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(ex, ey); ctx.lineWidth = lw * 1.8; ctx.strokeStyle = col;
-    if (a.type === 'link') { ctx.setLineDash([lw * 4, lw * 3]); ctx.lineDashOffset = -clk * lw * 18; }
-    ctx.stroke(); ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(ex, ey); ctx.lineWidth = lw * 3.4; ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.stroke();
+    ctx.save(); ctx.shadowColor = hexA(col, 0.9); ctx.shadowBlur = lw * 3;
+    ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(ex, ey); ctx.lineWidth = lw * 1.9; ctx.strokeStyle = style === 'link' ? hexA(col, 0.45) : col; ctx.stroke(); ctx.restore();
+    if (style === 'link') { ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(ex, ey); ctx.setLineDash([lw * 4, lw * 3]); ctx.lineDashOffset = -clk * lw * 18; ctx.lineWidth = lw * 1.9; ctx.strokeStyle = col; ctx.stroke(); ctx.setLineDash([]); }
     const d = A.p.m && B.p.m ? Math.hypot(A.p.m[0] - B.p.m[0], A.p.m[1] - B.p.m[1]) : null;
-    if (d != null && gr > 0.95 && (a.type === 'link' || a.dist !== false && nodes.length <= 6)) annPill(ctx, (A.x + B.x) / 2, (A.y + B.y) / 2, fmtM(d), col, a.type === 'link' ? fs : fs * 0.8);
+    if (d != null && gr > 0.95 && (style === 'link' || nodes.length <= 6)) pills.push([(A.x + B.x) / 2, (A.y + B.y) / 2, (style === 'link' ? '↔ ' : '') + fmtM(d), style === 'link' ? fs : fs * 0.8]);
+    if (hit) hit.shapes.push({ k: 'poly', P: [[A.x, A.y], [B.x, B.y]], open: true, line: true });
   }
-  nodes.forEach(n => { ctx.beginPath(); ctx.arc(n.x, n.y, lw * 2.6, 0, Math.PI * 2); ctx.fillStyle = col; ctx.fill(); ctx.lineWidth = lw * 0.8; ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.stroke(); });
+  nodes.forEach(n => { ctx.beginPath(); ctx.arc(n.x, n.y, lw * 2.4, 0, Math.PI * 2); ctx.fillStyle = col; ctx.fill(); ctx.lineWidth = lw * 0.8; ctx.strokeStyle = 'rgba(0,0,0,.7)'; ctx.stroke(); });
+  pills.forEach(([x, y, s, f]) => { const b = annPill(ctx, x, y, s, col, f); if (hit) hit.shapes.push(Object.assign({ k: 'rect' }, b)); });
+  if (hit && fill && nodes.length >= 3) hit.shapes.push({ k: 'poly', P: nodes.map(n => [n.x, n.y]) });
 }
-function annZone2d(ctx, a, g, W, H, clk, col, fs, lw) {
-  let P = null;
+function annZoneCorners(a) { const [x0, y0, x1, y1] = a.zone; return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]; }
+function annZone2d(S) {
+  const { ctx, a, g, W, H, clk, col, fs, lw, hit } = S;
+  let P = null, C = null;
   if (a.zone && g) {
-    const [x0, y0, x1, y1] = a.zone, pts = [];
+    const pts = [], cs = annZoneCorners(a);
     // edges split into pieces, so the perspective bends them correctly
-    const edge = (ax, ay, bx, by) => { for (let k = 0; k < 12; k++) pts.push([ax + (bx - ax) * k / 12, ay + (by - ay) * k / 12]); };
-    edge(x0, y0, x1, y0); edge(x1, y0, x1, y1); edge(x1, y1, x0, y1); edge(x0, y1, x0, y0);
+    for (let e = 0; e < 4; e++) { const [ax, ay] = cs[e], [bx, by] = cs[(e + 1) % 4]; for (let k = 0; k < 12; k++) pts.push([ax + (bx - ax) * k / 12, ay + (by - ay) * k / 12]); }
     P = pts.map(([x, y]) => annImg(g, x, y)); if (P.some(q => !q)) return;
-    P = P.map(q => [q[0] * W, q[1] * H]);
-  } else if (a.img) { const [x0, y0, x1, y1] = a.img; P = [[x0 * W, y0 * H], [x1 * W, y0 * H], [x1 * W, y1 * H], [x0 * W, y1 * H]]; }
+    P = P.map(q => [q[0] * W, q[1] * H]); C = [0, 12, 24, 36].map(i => P[i]);
+  } else if (a.img) { const [x0, y0, x1, y1] = a.img; P = [[x0 * W, y0 * H], [x1 * W, y0 * H], [x1 * W, y1 * H], [x0 * W, y1 * H]]; C = P; }
   if (!P) return;
-  polyPath(ctx, P); ctx.fillStyle = hexA(col, 0.2); ctx.fill();
-  // stripes
+  const xs = P.map(q => q[0]), ys = P.map(q => q[1]), minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const fg = ctx.createLinearGradient(0, minY, 0, maxY); fg.addColorStop(0, hexA(col, 0.12)); fg.addColorStop(1, hexA(col, 0.3));
+  polyPath(ctx, P); ctx.fillStyle = fg; ctx.fill();
+  // moving stripes
   ctx.save(); polyPath(ctx, P); ctx.clip();
-  const xs = P.map(q => q[0]), ys = P.map(q => q[1]), minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys), gap = lw * 7;
-  ctx.strokeStyle = hexA(col, 0.18); ctx.lineWidth = lw * 1.6;
-  for (let x = minX - (maxY - minY); x < maxX; x += gap) { ctx.beginPath(); ctx.moveTo(x, maxY); ctx.lineTo(x + (maxY - minY), minY); ctx.stroke(); }
+  const gap = lw * 7, off = (clk * lw * 6) % gap;
+  ctx.strokeStyle = hexA(col, 0.2); ctx.lineWidth = lw * 1.6;
+  for (let x = minX - (maxY - minY) - gap + off; x < maxX; x += gap) { ctx.beginPath(); ctx.moveTo(x, maxY); ctx.lineTo(x + (maxY - minY), minY); ctx.stroke(); }
   ctx.restore();
-  polyPath(ctx, P); ctx.lineWidth = lw * 1.6; ctx.strokeStyle = col; ctx.setLineDash([lw * 5, lw * 3]); ctx.lineDashOffset = -clk * lw * 12; ctx.stroke(); ctx.setLineDash([]);
-  if (a.text) annPill(ctx, xs.reduce((s, v) => s + v, 0) / xs.length, ys.reduce((s, v) => s + v, 0) / ys.length, a.text, col, fs, false);
+  ctx.save(); ctx.shadowColor = hexA(col, 0.9); ctx.shadowBlur = lw * 3;
+  polyPath(ctx, P); ctx.lineWidth = lw * 1.4; ctx.strokeStyle = col; ctx.setLineDash([lw * 5, lw * 3]); ctx.lineDashOffset = -clk * lw * 12; ctx.stroke(); ctx.setLineDash([]);
+  // bright corner brackets
+  ctx.lineWidth = lw * 2.4; ctx.strokeStyle = col;
+  C.forEach((c, i) => { const prev = C[(i + 3) % 4], next = C[(i + 1) % 4], f = 0.18;
+    ctx.beginPath(); ctx.moveTo(c[0] + (prev[0] - c[0]) * f, c[1] + (prev[1] - c[1]) * f); ctx.lineTo(c[0], c[1]); ctx.lineTo(c[0] + (next[0] - c[0]) * f, c[1] + (next[1] - c[1]) * f); ctx.stroke(); });
+  ctx.restore();
+  let box = null;
+  if (a.text) box = annPill(ctx, xs.reduce((s, v) => s + v, 0) / xs.length, ys.reduce((s, v) => s + v, 0) / ys.length, a.text, col, fs, false);
+  if (hit) { hit.shapes.push({ k: 'poly', P }); if (box) hit.shapes.push(Object.assign({ k: 'rect' }, box)); hit.handles = C; hit.zone = true; }
+}
+// a band across the pitch at x (perspective), with a light curtain standing on it
+function annOffside2d(S) {
+  const { ctx, a, g, W, H, t, clk, col, fs, lw, hit } = S;
+  if (!g) return;
+  const o = annOffside(a, t); if (!o) return;
+  const { W: PW } = pitchDims(), gr = annGrow(a, t, 0.6), n = 24, ground = [], band = [[], []];
+  for (let k = 0; k <= n; k++) {
+    const y = PW * k / n * gr, q = annImg(g, o.x, y), q1 = annImg(g, o.x - 0.3, y), q2 = annImg(g, o.x + 0.3, y);
+    if (!q || !q1 || !q2) continue;
+    ground.push([q[0] * W, q[1] * H]); band[0].push([q1[0] * W, q1[1] * H]); band[1].push([q2[0] * W, q2[1] * H]);
+  }
+  if (ground.length < 2) return;
+  // curtain: from the line up to about a player's height
+  const top = ground.map(([x, y], i) => { const ppm = annScale(g, { m: [o.x, PW * i / n] }, W, H); return [x, y - ppm * 2.1]; });
+  const cg = ctx.createLinearGradient(0, Math.min(...top.map(q => q[1])), 0, Math.max(...ground.map(q => q[1])));
+  cg.addColorStop(0, hexA(col, 0)); cg.addColorStop(1, hexA(col, 0.26));
+  ctx.beginPath(); ground.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); for (let i = top.length - 1; i >= 0; i--) ctx.lineTo(top[i][0], top[i][1]); ctx.closePath(); ctx.fillStyle = cg; ctx.fill();
+  polyPath(ctx, band[0].concat(band[1].slice().reverse())); ctx.fillStyle = hexA(col, 0.45); ctx.fill();
+  ctx.save(); ctx.shadowColor = hexA(col, 1); ctx.shadowBlur = lw * 4; polyPath(ctx, ground, true); ctx.lineWidth = lw * 1.3; ctx.strokeStyle = col; ctx.stroke(); ctx.restore();
+  // a light running along the line
+  const ph = (clk * 0.35) % 1, i = Math.floor(ph * (ground.length - 1));
+  ctx.save(); ctx.globalCompositeOperation = 'lighter'; const rg = ctx.createRadialGradient(ground[i][0], ground[i][1], 0, ground[i][0], ground[i][1], lw * 10); rg.addColorStop(0, hexA(col, 0.7)); rg.addColorStop(1, hexA(col, 0)); ctx.fillStyle = rg; ctx.fillRect(ground[i][0] - lw * 10, ground[i][1] - lw * 10, lw * 20, lw * 20); ctx.restore();
+  const end = ground[ground.length - 1];
+  const box = annPill(ctx, end[0], end[1] - fs * 1.4, a.text || (o.approx ? 'Offside line (no GK)' : 'Offside line'), col, fs * 0.9);
+  if (hit) { hit.shapes.push({ k: 'poly', P: band[0].concat(band[1].slice().reverse()) }); hit.shapes.push(Object.assign({ k: 'rect' }, box)); }
+}
+function annBack2d(S) {
+  const { ctx, a, t, W, H, col, fs, hit } = S;
+  const b = annBackLine(a, t); if (!b) return;
+  const nodes = b.nodes.map(o => ({ p: o.p, x: o.p.x * W, y: o.p.y * H }));
+  annLines2d(S, nodes, false, 'chain');
+  const top = nodes.reduce((m, n) => n.y < m.y ? n : m, nodes[0]), mid = nodes[Math.floor(nodes.length / 2)];
+  const box = annPill(ctx, (top.x + mid.x) / 2, Math.min(...nodes.map(n => n.y)) - fs * 2.2, `${a.text || 'Back line'} · ${Math.round(b.height)} m from goal`, col, fs * 0.9, false);
+  if (hit) hit.shapes.push(Object.assign({ k: 'rect' }, box));
 }
 
 /* ---------------------------------------------------------------- the 2D pitch (SVG, metres) */
 function annSvg(t) {
   const list = annActive(t); if (!list.length) return '';
-  const clk = annClock(t); let s = '';
+  const clk = annClock(t), { L, W } = pitchDims(); let s = '';
+  const lines = (pts, col, dash, labels) => {
+    let seg = '';
+    for (let k = 0; k + 1 < pts.length; k++) {
+      const A = pts[k], B = pts[k + 1], d = Math.hypot(A[0] - B[0], A[1] - B[1]);
+      seg += `<line x1="${A[0].toFixed(2)}" y1="${A[1].toFixed(2)}" x2="${B[0].toFixed(2)}" y2="${B[1].toFixed(2)}" stroke="${col}" stroke-width=".45" ${dash ? 'stroke-dasharray="1.2 .8"' : ''}/>`;
+      if (labels) seg += `<text x="${((A[0] + B[0]) / 2).toFixed(2)}" y="${((A[1] + B[1]) / 2 - 0.8).toFixed(2)}" font-size="1.8" text-anchor="middle" fill="#fff" font-weight="700" stroke="#000" stroke-width=".3" paint-order="stroke">${fmtM(d)}</text>`;
+    }
+    return seg;
+  };
   list.forEach(a => {
     const al = annAlpha(a, t).toFixed(2), col = esc(a.color || '#ffd23b');
     if (a.type === 'zone' && a.zone) {
       const [x0, y0, x1, y1] = a.zone;
       s += `<g opacity="${al}"><rect x="${Math.min(x0, x1)}" y="${Math.min(y0, y1)}" width="${Math.abs(x1 - x0)}" height="${Math.abs(y1 - y0)}" fill="${col}" fill-opacity=".2" stroke="${col}" stroke-width=".4" stroke-dasharray="1.4 .9"/>${a.text ? `<text x="${(x0 + x1) / 2}" y="${(y0 + y1) / 2 + 0.7}" font-size="2.2" text-anchor="middle" fill="#fff" font-weight="700">${esc(a.text)}</text>` : ''}</g>`;
+      return;
+    }
+    if (a.type === 'offside') {
+      const o = annOffside(a, t); if (!o) return;
+      s += `<g opacity="${al}"><rect x="${(o.x - 0.35).toFixed(2)}" y="0" width=".7" height="${W}" fill="${col}" fill-opacity=".35"/><line x1="${o.x.toFixed(2)}" y1="0" x2="${o.x.toFixed(2)}" y2="${W}" stroke="${col}" stroke-width=".35"/><text x="${o.x.toFixed(2)}" y="${(W - 1).toFixed(2)}" font-size="1.9" text-anchor="middle" fill="${col}" font-weight="700" stroke="#000" stroke-width=".3" paint-order="stroke">offside</text></g>`;
+      return;
+    }
+    if (a.type === 'backline') {
+      const b = annBackLine(a, t); if (!b) return;
+      const pts = b.nodes.map(o => o.p.m);
+      s += `<g opacity="${al}">${lines(pts, col, false, true)}${pts.map(m => `<circle cx="${m[0].toFixed(2)}" cy="${m[1].toFixed(2)}" r="1.1" fill="none" stroke="${col}" stroke-width=".35"/>`).join('')}</g>`;
       return;
     }
     if (a.type === 'run') {
@@ -236,95 +422,10 @@ function annSvg(t) {
       return;
     }
     const pts = ms.filter(Boolean); if (pts.length < 2) return;
-    let seg = '';
-    for (let k = 0; k + 1 < pts.length; k++) {
-      const A = pts[k], B = pts[k + 1], d = Math.hypot(A[0] - B[0], A[1] - B[1]);
-      seg += `<line x1="${A[0].toFixed(2)}" y1="${A[1].toFixed(2)}" x2="${B[0].toFixed(2)}" y2="${B[1].toFixed(2)}" stroke="${col}" stroke-width=".45" ${a.type === 'link' ? 'stroke-dasharray="1.2 .8"' : ''}/>`;
-      if (a.type === 'link' || pts.length <= 6) seg += `<text x="${((A[0] + B[0]) / 2).toFixed(2)}" y="${((A[1] + B[1]) / 2 - 0.8).toFixed(2)}" font-size="1.8" text-anchor="middle" fill="#fff" font-weight="700" stroke="#000" stroke-width=".3" paint-order="stroke">${fmtM(d)}</text>`;
-    }
     const fill = a.type === 'chain' && a.fill && pts.length >= 3 ? `<polygon points="${pts.map(q => q[0].toFixed(2) + ',' + q[1].toFixed(2)).join(' ')}" fill="${col}" fill-opacity=".15"/>` : '';
-    s += `<g opacity="${al}">${fill}${seg}</g>`;
+    s += `<g opacity="${al}">${fill}${lines(pts, col, a.type === 'link', a.type === 'link' || pts.length <= 6)}</g>`;
   });
   return s;
-}
-
-/* ---------------------------------------------------------------- the 3D view */
-const annTex = new Map();
-function annTexFor(text, col) {
-  const key = text + '|' + col; if (annTex.has(key)) return annTex.get(key);
-  const T = V3.T, c = document.createElement('canvas'), x = c.getContext('2d'), fs = 40;
-  x.font = `bold ${fs}px Inter, "Segoe UI", sans-serif`;
-  const w = Math.ceil(x.measureText(text).width + fs * 1.1); c.width = Math.max(64, w + 8); c.height = 64;
-  x.font = `bold ${fs}px Inter, "Segoe UI", sans-serif`;
-  x.fillStyle = 'rgba(8,12,16,.88)'; x.strokeStyle = col; x.lineWidth = 5;
-  const r = 26; x.beginPath(); x.moveTo(4 + r, 4); x.arcTo(c.width - 4, 4, c.width - 4, 60, r); x.arcTo(c.width - 4, 60, 4, 60, r); x.arcTo(4, 60, 4, 4, r); x.arcTo(4, 4, c.width - 4, 4, r); x.closePath(); x.fill(); x.stroke();
-  x.fillStyle = col; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(text, c.width / 2, 34);
-  const tex = new T.CanvasTexture(c); tex.colorSpace = T.SRGBColorSpace; tex.__w = c.width / 64;
-  annTex.set(key, tex); return tex;
-}
-function v3Anns(t) {
-  const T = V3.T, fx = V3.fx; if (!T || !fx) return;
-  const old = fx.userData.ann || []; old.forEach(o => { fx.remove(o); v3Dispose(o); }); fx.userData.ann = [];
-  if (annTex.size > 120) { annTex.forEach(x => x.dispose()); annTex.clear(); }
-  const list = annActive(t); V3.annAnim = list.some(a => a.type === 'spot' || a.type === 'link' || a.type === 'zone');
-  if (!list.length) return;
-  const add = o => { fx.add(o); fx.userData.ann.push(o); return o; };
-  const mat = (col, op, extra) => new T.MeshBasicMaterial(Object.assign({ color: col, transparent: true, opacity: op, depthWrite: false, side: T.DoubleSide }, extra || {}));
-  const flat = (geo, col, op, y, extra) => { const m = new T.Mesh(geo, mat(col, op, extra)); m.rotation.x = -Math.PI / 2; m.position.y = y; return add(m); };
-  const sprite = (text, col, x, y, z, h = 0.75) => { const tx = annTexFor(text, col), sp = new T.Sprite(new T.SpriteMaterial({ map: tx, depthTest: false, transparent: true })); sp.position.set(x, y, z); sp.scale.set(h * tx.__w, h, 1); sp.renderOrder = 12; return add(sp); };
-  const tube = (pts, r, col, op) => { if (pts.length < 2) return null; const curve = new T.CatmullRomCurve3(pts.map(p => new T.Vector3(p[0], p[1], p[2])), false, 'centripetal'); const m = new T.Mesh(new T.TubeGeometry(curve, Math.max(8, pts.length * 3), r, 8, false), mat(col, op)); m.renderOrder = 5; return add(m); };
-  const w3 = m => { const [x, z] = v3W(m[0], m[1]); return [x, z]; };
-  const clk = annClock(t);
-  list.forEach(a => {
-    const al = annAlpha(a, t), col = a.color || '#ffd23b';
-    if (a.type === 'zone' && a.zone) {
-      const [x0, y0, x1, y1] = a.zone, [ax, az] = w3([x0, y0]), [bx, bz] = w3([x1, y1]);
-      const g = new T.PlaneGeometry(Math.abs(bx - ax), Math.abs(bz - az)), m = flat(g, col, 0.24 * al, 0.035); m.position.x = (ax + bx) / 2; m.position.z = (az + bz) / 2;
-      const ph = 0.6 + 0.4 * Math.sin(clk * 4);
-      const e = [[ax, az], [bx, az], [bx, bz], [ax, bz], [ax, az]].flatMap(([x, z]) => [x, 0.06, z]);
-      const lg = new T.BufferGeometry(); lg.setAttribute('position', new T.BufferAttribute(new Float32Array(e), 3));
-      add(new T.Line(lg, new T.LineBasicMaterial({ color: col, transparent: true, opacity: al * ph })));
-      if (a.text) sprite(a.text, col, (ax + bx) / 2, 1.6, (az + bz) / 2, 2.2).material.opacity = al;
-      return;
-    }
-    if (a.type === 'run') {
-      const p = annRunPath(a); if (!p) return; const m = p.filter(q => q.m).map(q => q.m); if (m.length < 2) return;
-      const n = Math.max(2, Math.ceil(m.length * annGrow(a, t, Math.min(1, (a.t1 - a.t0) * 0.35))));
-      const pts = m.slice(0, n).map(q => { const [x, z] = w3(q); return [x, 0.12, z]; });
-      tube(pts, 0.16, col, 0.9 * al);
-      const e = pts[pts.length - 1], b = pts[Math.max(0, pts.length - 4)], ang = Math.atan2(e[2] - b[2], e[0] - b[0]);
-      const cone = add(new T.Mesh(new T.ConeGeometry(0.55, 1.3, 16), mat(col, al)));
-      cone.position.set(e[0], 0.25, e[2]); cone.rotation.z = -Math.PI / 2; cone.rotation.y = -ang; cone.rotation.order = 'YZX';
-      return;
-    }
-    const ps = a.tracks.map(id => { const q = annPos(annTrack(id), t); return q && q.m ? q.m : null; });
-    if (a.type === 'spot' || a.type === 'label') {
-      const m = ps[0]; if (!m) return; const [x, z] = w3(m);
-      if (a.type === 'spot') {
-        const disc = flat(new T.CircleGeometry(1.35, 40), col, 0.38 * al, 0.03); disc.position.x = x; disc.position.z = z;
-        const ring = flat(new T.RingGeometry(1.25, 1.5, 48), col, 0.95 * al, 0.04); ring.position.x = x; ring.position.z = z;
-        for (let k = 0; k < 2; k++) { const ph = ((clk * 0.9) + k * 0.5) % 1, rp = flat(new T.RingGeometry(1.3, 1.42, 48), col, (1 - ph) * 0.8 * al, 0.045); rp.position.x = x; rp.position.z = z; rp.scale.setScalar(1 + ph * 1.2); }
-        const beam = add(new T.Mesh(new T.CylinderGeometry(0.45, 1.35, 9, 32, 1, true), mat(col, 0.16 * al, { blending: T.AdditiveBlending })));
-        beam.position.set(x, 4.5, z);
-      }
-      if (a.type === 'label' || a.text) sprite(a.text || trackLabel(annTrack(a.tracks[0])), col, x, 3.7, z, 1.3).material.opacity = al;
-      return;
-    }
-    const pts = ps.filter(Boolean).map(m => { const [x, z] = w3(m); return [x, 0.15, z, m]; });
-    if (pts.length < 2) return;
-    const gr = annGrow(a, t, 0.6);
-    if (a.type === 'chain' && a.fill && pts.length >= 3) {
-      const sh = new T.Shape(); pts.forEach(([x, , z], i) => i ? sh.lineTo(x, -z) : sh.moveTo(x, -z));
-      flat(new T.ShapeGeometry(sh), col, 0.18 * al * gr, 0.04);
-    }
-    for (let k = 0; k + 1 < pts.length; k++) {
-      const A = pts[k], B = pts[k + 1], E = [A[0] + (B[0] - A[0]) * gr, 0.15, A[2] + (B[2] - A[2]) * gr];
-      tube([[A[0], 0.15, A[2]], E], a.type === 'link' ? 0.07 : 0.1, col, 0.95 * al);
-      const d = Math.hypot(A[3][0] - B[3][0], A[3][1] - B[3][1]);
-      if (gr > 0.95 && (a.type === 'link' || pts.length <= 6)) sprite(fmtM(d), col, (A[0] + B[0]) / 2, a.type === 'link' ? 1.5 : 1.1, (A[2] + B[2]) / 2, a.type === 'link' ? 1.5 : 1.15).material.opacity = al;
-    }
-    pts.forEach(([x, , z]) => { const d = flat(new T.CircleGeometry(0.42, 20), col, al, 0.05); d.position.x = x; d.position.z = z; });
-  });
 }
 
 /* ---------------------------------------------------------------- the live overlay on the video */
@@ -340,16 +441,18 @@ function paintAnnotations() {
   annView.classList.toggle('hidden', !any);
   if (!any) return;
   annPlace();
-  const ctx = annView.getContext('2d'); ctx.clearRect(0, 0, annView.width, annView.height);
-  drawAnnotations(ctx, annView.width, annView.height, t);
-  // authoring: highlight the players picked so far and the zone being dragged
-  if (Ann.on) {
-    const W = annView.width, H = annView.height;
-    Ann.picks.forEach((id, i) => { const p = annPos(annTrack(id), t); if (!p) return; ctx.save(); ctx.strokeStyle = Ann.color; ctx.lineWidth = 3; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.arc(p.x * W, p.y * H, Math.max(14, W / 70), 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); annPill(ctx, p.x * W, p.y * H - Math.max(26, W / 40), String(i + 1), Ann.color, Math.max(12, H * 0.022), false); ctx.restore(); });
-    if (Ann.drag) { const d = Ann.drag; ctx.save(); ctx.strokeStyle = Ann.color; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.strokeRect(d.x0 * W, d.y0 * H, (d.x1 - d.x0) * W, (d.y1 - d.y0) * H); ctx.restore(); }
-  }
+  const ctx = annView.getContext('2d'), W = annView.width, H = annView.height; ctx.clearRect(0, 0, W, H);
+  Ann.hits = [];
+  drawAnnotations(ctx, W, H, t, { hits: Ann.hits, sel: Ann.sel });
+  if (!Ann.on) return;
+  const fs = Math.max(11, Math.round(H * 0.022));
+  // authoring: the player under the mouse, the players picked so far and the zone being dragged
+  const ring = (id, label, dashed) => { const p = annPos(annTrack(id), t); if (!p) return; ctx.save(); ctx.strokeStyle = Ann.color; ctx.lineWidth = 3; if (dashed) ctx.setLineDash([5, 4]); ctx.shadowColor = 'rgba(0,0,0,.7)'; ctx.shadowBlur = 4; ctx.beginPath(); ctx.arc(p.x * W, p.y * H - W * 0.006, Math.max(14, W / 70), 0, Math.PI * 2); ctx.stroke(); ctx.restore(); if (label) annPill(ctx, p.x * W, p.y * H - Math.max(30, W / 36), label, Ann.color, fs, !dashed); };
+  if (Ann.tool && Ann.tool !== 'zone' && Ann.hover && !Ann.picks.includes(Ann.hover)) { const tk = annTrack(Ann.hover); if (tk) ring(Ann.hover, (ANN_TEAM_TYPES.has(Ann.tool) ? teamName(tk.team) + ' · ' : '') + trackLabel(tk), false); }
+  Ann.picks.forEach((id, i) => ring(id, String(i + 1), true));
+  if (Ann.drag) { const d = Ann.drag; ctx.save(); ctx.strokeStyle = Ann.color; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.fillStyle = hexA(Ann.color, 0.12); ctx.fillRect(d.x0 * W, d.y0 * H, (d.x1 - d.x0) * W, (d.y1 - d.y0) * H); ctx.strokeRect(d.x0 * W, d.y0 * H, (d.x1 - d.x0) * W, (d.y1 - d.y0) * H); ctx.restore(); }
 }
-// keep the pulses moving while the video is paused
+// keep the effects moving while the video is paused
 function annLoop() {
   Ann.raf = 0;
   if (!hasVideo() || !video.paused || Ann.exporting) return;
@@ -363,86 +466,199 @@ function annKick() { if (!Ann.raf) Ann.raf = requestAnimationFrame(annLoop); }
 /* ---------------------------------------------------------------- authoring */
 function annSetTool(tool) {
   Ann.tool = Ann.tool === tool ? null : tool; Ann.picks = []; Ann.drag = null;
+  if (Ann.tool) annSelect(null);
   $$('#annBar [data-ann]').forEach(b => b.classList.toggle('on', b.dataset.ann === Ann.tool));
   $('#annDone').classList.toggle('hidden', Ann.tool !== 'chain');
   annView.classList.toggle('edit', !!Ann.tool);
-  $('#annHint').textContent = Ann.tool ? ANN_TYPES[Ann.tool].hint : 'Choose what to add, then click the players on the video. The annotation starts at the current moment.';
+  $('#annHint').textContent = Ann.tool ? ANN_TYPES[Ann.tool].hint : 'Choose what to add, then click the players on the video (or in the 3D view). Click an annotation to select it: colour, longer / shorter, delete – drag a zone or its corners.';
   if (Ann.tool && hasVideo()) video.pause();
-  paintAnnotations();
+  paintAnnotations(); if (typeof V3 !== 'undefined') V3.dirty = true;
 }
 function annOpen() {
   if (!hasVideo()) { toast('Open a video first', 'bad'); return; }
   if (!TR.tracks.some(tk => tk.kind === 'player' && tk.points.length)) toast('Annotations follow tracked players – track players first (🤖 Auto-detect or by hand). Zones work anyway.', 'info', 5000);
   if (typeof Draw !== 'undefined' && Draw.editing) Draw.close();
-  Ann.on = true; $('#annBar').classList.remove('hidden'); $('#btnAnn').classList.add('on');
-  TR.settings.overlay = TR.settings.overlay !== false;
+  Ann.on = true; $('#annBar').classList.remove('hidden'); $('#annInfo').classList.remove('hidden'); $('#btnAnn').classList.add('on'); annView.classList.add('live');
   annSetTool(null); annCount(); paintAnnotations(); annKick();
 }
-function annClose() { Ann.on = false; Ann.tool = null; Ann.picks = []; Ann.drag = null; $('#annBar').classList.add('hidden'); $('#annPop').classList.add('hidden'); $('#btnAnn').classList.remove('on'); annView.classList.remove('edit'); paintAnnotations(); }
+function annClose() { Ann.on = false; Ann.tool = null; Ann.picks = []; Ann.drag = null; Ann.hover = null; annSelect(null); $('#annBar').classList.add('hidden'); $('#annInfo').classList.add('hidden'); $('#annPop').classList.add('hidden'); $('#btnAnn').classList.remove('on'); annView.classList.remove('edit', 'live'); paintAnnotations(); }
 function annCount() { $('#annN').textContent = (TR.anns || []).length; }
 function annEnd(t0) {
   const v = $('#annDur').value;
   if (v === 'out' && clipIO.out != null && clipIO.out > t0 + 0.3) return clipIO.out;
   return Math.min(video.duration || t0 + 4, t0 + (Number(v) || 4));
 }
+function annChanged() { markDirty(); autosave(); annCount(); paintAnnotations(); if (typeof render2D === 'function') render2D(true); if (typeof V3 !== 'undefined') V3.dirty = true; annKick(); annSelBar(); }
 function annAdd(a) {
   checkpoint();
   TR.anns = TR.anns || [];
   const t0 = Math.round(video.currentTime * 1000) / 1000;
   const x = Object.assign({ id: uid(), t0, t1: Math.round(annEnd(t0) * 1000) / 1000, color: Ann.color, text: '' }, a);
   TR.anns.push(x);
-  markDirty(); autosave(); annCount(); paintAnnotations(); if (typeof render2D === 'function') render2D(true); if (typeof V3 !== 'undefined') V3.dirty = true;
+  annChanged();
   toast(`${ANN_TYPES[x.type].icon} ${ANN_TYPES[x.type].name} added: ${annName(x)} · ${fmtTime(x.t0)}–${fmtTime(x.t1)}`, 'ok', 2500);
-  annKick();
   return x;
 }
+// a player was picked (on the video or in the 3D view)
+async function annPickTrack(tk) {
+  if (!Ann.on || !Ann.tool || Ann.tool === 'zone' || !tk) return false;
+  const T = ANN_TYPES[Ann.tool];
+  if (ANN_TEAM_TYPES.has(Ann.tool)) {
+    if (tk.kind !== 'player' || (tk.team !== 'Home' && tk.team !== 'Away')) { toast('Click a player of one of the two teams', 'bad', 2000); return true; }
+    if (Ann.tool === 'offside' && !TR.cals.some(c => c.type !== 'none')) { toast('The offside line needs the pitch calibration', 'bad', 3000); return true; }
+    annAdd({ type: Ann.tool, tracks: [tk.id], team: tk.team, text: '' });
+    return true;
+  }
+  if (Ann.picks.includes(tk.id)) { Ann.picks = Ann.picks.filter(id => id !== tk.id); paintAnnotations(); return true; }
+  Ann.picks.push(tk.id); paintAnnotations(); if (typeof V3 !== 'undefined') V3.dirty = true;
+  if (Ann.picks.length >= T.picks) {
+    const tracks = Ann.picks.slice(); Ann.picks = [];
+    let text = '';
+    if (Ann.tool === 'label') { text = await Dlg.ask('Name tag', 'Text on the tag (leave as it is for the player’s name):', trackLabel(tk)); if (text == null) { paintAnnotations(); return true; } if (text === trackLabel(tk)) text = ''; }
+    annAdd({ type: Ann.tool, tracks, text });
+  } else $('#annHint').textContent = `${T.hint}  (${Ann.picks.length} picked)`;
+  return true;
+}
+// a zone dragged as a box (pitch metres, or picture coordinates without calibration)
+async function annAddZone(box, img) {
+  const text = await Dlg.ask('Zone', 'Text in the zone (optional), e.g. “Space” or “Overload”:', '');
+  if (text == null) { paintAnnotations(); return null; }
+  return img ? annAdd({ type: 'zone', tracks: [], img: box, text }) : annAdd({ type: 'zone', tracks: [], zone: box, text });
+}
+function annPitchBox(xs, ys) { const { L, W } = pitchDims(); return [clamp(Math.min(...xs), -3, L + 3), clamp(Math.min(...ys), -3, W + 3), clamp(Math.max(...xs), -3, L + 3), clamp(Math.max(...ys), -3, W + 3)].map(v => Math.round(v * 10) / 10); }
+function annMouse(e) { const r = annView.getBoundingClientRect(); return { x: clamp((e.clientX - r.left) / r.width, 0, 1), y: clamp((e.clientY - r.top) / r.height, 0, 1), px: (e.clientX - r.left) * annView.width / r.width, py: (e.clientY - r.top) * annView.height / r.height, r }; }
 function annHit(e) {
-  const r = annView.getBoundingClientRect(), x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height, t = video.currentTime;
+  const m = annMouse(e), r = m.r, t = video.currentTime;
   let best = null;
   TR.tracks.forEach(tk => {
     if (tk.kind === 'ball' || !trackDrawn(tk)) return;
     const p = annPos(tk, t); if (!p) return;
     // the feet point, or anywhere on the body above it (up to 6 % of the picture height)
-    const px = (x - p.x) * r.width, py = (y - p.y) * r.height, d = Math.hypot(px, py > 0 ? py : Math.max(0, -py - r.height * 0.06));
+    const px = (m.x - p.x) * r.width, py = (m.y - p.y) * r.height, d = Math.hypot(px, py > 0 ? py : Math.max(0, -py - r.height * 0.06));
     if (d < Math.max(22, r.width / 45) && (!best || d < best.d)) best = { tk, d };
   });
-  return { x: clamp(x, 0, 1), y: clamp(y, 0, 1), tk: best && best.tk };
+  return { x: m.x, y: m.y, tk: best && best.tk };
 }
+// which annotation is under the mouse (topmost first), from the shapes recorded while drawing
+function annHitAnn(e) {
+  const m = annMouse(e), tol = Math.max(8, annView.width / 160);
+  const inPoly = (P, x, y) => { let c = false; for (let i = 0, j = P.length - 1; i < P.length; j = i++) if ((P[i][1] > y) !== (P[j][1] > y) && x < (P[j][0] - P[i][0]) * (y - P[i][1]) / (P[j][1] - P[i][1]) + P[i][0]) c = !c; return c; };
+  const segD = (x, y, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l = dx * dx + dy * dy, u = l ? clamp(((x - a[0]) * dx + (y - a[1]) * dy) / l, 0, 1) : 0; return Math.hypot(x - a[0] - u * dx, y - a[1] - u * dy); };
+  for (let i = Ann.hits.length - 1; i >= 0; i--) {
+    const h = Ann.hits[i];
+    for (const s of h.shapes) {
+      if (s.k === 'rect' && m.px >= s.x - 3 && m.px <= s.x + s.w + 3 && m.py >= s.y - 3 && m.py <= s.y + s.h + 3) return { h, m };
+      if (s.k === 'poly' && s.line) { for (let k = 1; k < s.P.length; k++) if (segD(m.px, m.py, s.P[k - 1], s.P[k]) < tol) return { h, m }; }
+      else if (s.k === 'poly' && inPoly(s.P, m.px, m.py)) return { h, m };
+      if (s.k === 'circle' && Math.hypot(m.px - s.x, m.py - s.y) < s.r + tol) return { h, m };
+    }
+  }
+  return null;
+}
+const annById = id => (TR.anns || []).find(a => a.id === id);
+
+/* ---------------------------------------------------------------- selecting and editing */
+function annSelect(id) {
+  Ann.sel = id && annById(id) ? id : null;
+  annSelBar(); paintAnnotations(); if (typeof V3 !== 'undefined') V3.dirty = true;
+}
+function annSelBar() {
+  const box = $('#annSel'); if (!box) return;
+  const a = Ann.sel ? annById(Ann.sel) : null;
+  box.classList.toggle('hidden', !a);
+  if (!a) return;
+  box.innerHTML = `<span class="chip" style="background:${esc(a.color)}"></span><b>${ANN_TYPES[a.type].icon} ${esc(annName(a))}</b><span class="muted">${fmtTime(a.t0)}–${fmtTime(a.t1)}</span>
+    <button class="small" id="annSelStart" title="Let it start at the current moment">⇤ start here</button><button class="small" id="annSelEnd" title="Let it end at the current moment">end here ⇥</button>
+    <button class="small" id="annSelShort" title="Shorter (−1 s)">−1 s</button><button class="small" id="annSelLong" title="Longer (+1 s)">+1 s</button>
+    ${a.type !== 'run' ? `<button class="small" id="annSelText" title="Text">✎ text</button>` : ''}
+    <button class="small danger" id="annSelDel" title="Delete (Delete key)">🗑</button><button class="small" id="annSelX" title="Deselect (Esc)">✕</button>
+    <span class="muted small">· click a colour to recolour it</span>`;
+  const len = d => { checkpoint(); a.t1 = Math.max(a.t0 + 0.5, Math.round((a.t1 + d) * 1000) / 1000); annChanged(); };
+  box.querySelector('#annSelShort').onclick = () => len(-1);
+  const now = () => Math.round(video.currentTime * 1000) / 1000;
+  box.querySelector('#annSelStart').onclick = () => { const t = now(); if (t >= a.t1 - 0.3) { toast('The start must be before the end (' + fmtTime(a.t1) + ')', 'bad'); return; } checkpoint(); a.t0 = t; annChanged(); };
+  box.querySelector('#annSelEnd').onclick = () => { const t = now(); if (t <= a.t0 + 0.3) { toast('The end must be after the start (' + fmtTime(a.t0) + ')', 'bad'); return; } checkpoint(); a.t1 = t; annChanged(); };
+  box.querySelector('#annSelLong').onclick = () => len(1);
+  box.querySelector('#annSelDel').onclick = () => annDelete(a.id);
+  box.querySelector('#annSelX').onclick = () => annSelect(null);
+  const tb = box.querySelector('#annSelText'); if (tb) tb.onclick = async () => { const v = await Dlg.ask('Text', 'Text shown with this annotation (empty = default):', a.text || ''); if (v == null) return; checkpoint(); a.text = v.trim(); annChanged(); };
+}
+function annDelete(id) {
+  checkpoint(); TR.anns = (TR.anns || []).filter(a => a.id !== id); if (Ann.sel === id) Ann.sel = null; annChanged();
+  toast('Annotation deleted (Ctrl+Z brings it back)', 'info', 2000);
+}
+function annSetColour(col) {
+  Ann.color = col; $$('#annBar [data-acolor]').forEach(x => x.classList.toggle('on', x.dataset.acolor === col));
+  const a = Ann.sel && annById(Ann.sel);
+  if (a && a.color !== col) { checkpoint(); a.color = col; annChanged(); }
+  paintAnnotations();
+}
+// dragging a selected zone (inside = move, near a corner = resize); works in pitch metres
+function annZoneDragStart(a, h, m) {
+  const t = video.currentTime;
+  if (a.zone) {
+    const g = annGeo(t); if (!g) return null;
+    const corner = (h.handles || []).findIndex(([x, y]) => Math.hypot(x - m.px, y - m.py) < Math.max(10, annView.width / 110));
+    const p0 = toPitch(t, m.x, m.y); if (!p0) return null;
+    return { a, corner, p0, z0: a.zone.slice(), moved: false };
+  }
+  if (a.img) return { a, corner: -1, p0: [m.x, m.y], z0: a.img.slice(), img: true, moved: false };
+  return null;
+}
+function annZoneDragMove(e) {
+  const d = Ann.edit, m = annMouse(e), t = video.currentTime;
+  const p = d.img ? [m.x, m.y] : toPitch(t, m.x, m.y); if (!p) return;
+  if (!d.moved) { checkpoint(); d.moved = true; }
+  const z = d.z0.slice(), dx = p[0] - d.p0[0], dy = p[1] - d.p0[1];
+  if (d.corner < 0) { z[0] += dx; z[2] += dx; z[1] += dy; z[3] += dy; }
+  else { const xi = d.corner === 0 || d.corner === 3 ? 0 : 2, yi = d.corner < 2 ? 1 : 3; z[xi] = p[0]; z[yi] = p[1]; }
+  const nz = [Math.min(z[0], z[2]), Math.min(z[1], z[3]), Math.max(z[0], z[2]), Math.max(z[1], z[3])].map(v => Math.round(v * (d.img ? 1000 : 10)) / (d.img ? 1000 : 10));
+  if (d.img) d.a.img = nz; else d.a.zone = nz;
+  paintAnnotations(); if (typeof render2D === 'function') render2D(true); if (typeof V3 !== 'undefined') V3.dirty = true;
+}
+
+/* ---------------------------------------------------------------- mouse on the video */
 annView.addEventListener('mousedown', async e => {
-  if (!Ann.on || !Ann.tool || e.button !== 0) return;
+  if (!Ann.on || e.button !== 0) return;
   e.preventDefault();
-  const h = annHit(e), T = ANN_TYPES[Ann.tool];
-  if (Ann.tool === 'zone') { Ann.drag = { x0: h.x, y0: h.y, x1: h.x, y1: h.y }; return; }
-  if (!h.tk) { toast('Click a tracked player (their marker on the video)', 'bad', 1800); return; }
-  if (Ann.picks.includes(h.tk.id)) { Ann.picks = Ann.picks.filter(id => id !== h.tk.id); paintAnnotations(); return; }
-  Ann.picks.push(h.tk.id); paintAnnotations();
-  if (Ann.picks.length >= T.picks) {
-    const tracks = Ann.picks.slice(); Ann.picks = [];
-    let text = '';
-    if (Ann.tool === 'label') { text = await Dlg.ask('Name tag', 'Text on the tag (leave as it is for the player’s name):', trackLabel(h.tk)); if (text == null) { paintAnnotations(); return; } if (text === trackLabel(h.tk)) text = ''; }
-    annAdd({ type: Ann.tool, tracks, text });
-  } else $('#annHint').textContent = `${T.hint}  (${Ann.picks.length} picked)`;
+  if (Ann.tool === 'zone') { const h = annHit(e); Ann.drag = { x0: h.x, y0: h.y, x1: h.x, y1: h.y }; return; }
+  if (Ann.tool) { const h = annHit(e); if (!h.tk) { toast('Click a tracked player (their marker on the video)', 'bad', 1800); return; } annPickTrack(h.tk); return; }
+  // no tool: the corner handles of the selected zone first (they sit on its edge), then select / drag an annotation
+  if (Ann.sel) {
+    const a = annById(Ann.sel), h = Ann.hits.find(x => x.id === Ann.sel), m = annMouse(e);
+    if (a && a.type === 'zone' && h && (h.handles || []).some(([x, y]) => Math.hypot(x - m.px, y - m.py) < Math.max(10, annView.width / 110))) { Ann.edit = annZoneDragStart(a, h, m); return; }
+  }
+  const hit = annHitAnn(e);
+  if (!hit) { annSelect(null); return; }
+  if (Ann.sel !== hit.h.id) annSelect(hit.h.id);
+  const a = annById(hit.h.id);
+  if (a && a.type === 'zone') Ann.edit = annZoneDragStart(a, hit.h, hit.m);
 });
+annView.addEventListener('mousemove', e => {
+  if (!Ann.on || Ann.drag || Ann.edit) return;
+  let cur = 'default';
+  if (Ann.tool && Ann.tool !== 'zone') { const h = annHit(e), id = h.tk ? h.tk.id : null; if (id !== Ann.hover) { Ann.hover = id; paintAnnotations(); } cur = id ? 'pointer' : 'crosshair'; }
+  else if (Ann.tool === 'zone') cur = 'crosshair';
+  else if (Ann.sel && (() => { const a = annById(Ann.sel), h = Ann.hits.find(x => x.id === Ann.sel), m = annMouse(e); return a && a.type === 'zone' && h && (h.handles || []).some(([x, y]) => Math.hypot(x - m.px, y - m.py) < Math.max(10, annView.width / 110)); })()) cur = 'nwse-resize';
+  else { const hit = annHitAnn(e); if (hit) { const a = annById(hit.h.id), corner = a && a.type === 'zone' && Ann.sel === a.id && (hit.h.handles || []).some(([x, y]) => Math.hypot(x - hit.m.px, y - hit.m.py) < Math.max(10, annView.width / 110)); cur = corner ? 'nwse-resize' : a && a.type === 'zone' && Ann.sel === a.id ? 'move' : 'pointer'; } }
+  if (Ann.cursor !== cur) { annView.style.cursor = cur; Ann.cursor = cur; }
+});
+annView.addEventListener('mouseleave', () => { if (Ann.hover) { Ann.hover = null; paintAnnotations(); } });
 window.addEventListener('mousemove', e => {
+  if (Ann.edit) { annZoneDragMove(e); return; }
   if (!Ann.drag) return;
   const r = annView.getBoundingClientRect();
   Ann.drag.x1 = clamp((e.clientX - r.left) / r.width, 0, 1); Ann.drag.y1 = clamp((e.clientY - r.top) / r.height, 0, 1);
   paintAnnotations();
 });
 window.addEventListener('mouseup', async () => {
+  if (Ann.edit) { const d = Ann.edit; Ann.edit = null; if (d.moved) annChanged(); return; }
   if (!Ann.drag) return;
   const d = Ann.drag; Ann.drag = null;
   if (Math.abs(d.x1 - d.x0) < 0.01 || Math.abs(d.y1 - d.y0) < 0.01) { paintAnnotations(); return; }
-  const t = video.currentTime, a = toPitch(t, d.x0, d.y0), b = toPitch(t, d.x1, d.y1), c2 = toPitch(t, d.x1, d.y0), d2 = toPitch(t, d.x0, d.y1);
-  const text = await Dlg.ask('Zone', 'Text in the zone (optional), e.g. “Space” or “Overload”:', '');
-  if (text == null) { paintAnnotations(); return; }
-  const { L, W } = pitchDims();
-  if (a && b && c2 && d2) {
-    const xs = [a[0], b[0], c2[0], d2[0]], ys = [a[1], b[1], c2[1], d2[1]];
-    // the dragged box, as a rectangle on the pitch (the part inside the lines)
-    const z = [clamp(Math.min(...xs), -3, L + 3), clamp(Math.min(...ys), -3, W + 3), clamp(Math.max(...xs), -3, L + 3), clamp(Math.max(...ys), -3, W + 3)].map(v => Math.round(v * 10) / 10);
-    annAdd({ type: 'zone', tracks: [], zone: z, text });
-  } else annAdd({ type: 'zone', tracks: [], img: [Math.min(d.x0, d.x1), Math.min(d.y0, d.y1), Math.max(d.x0, d.x1), Math.max(d.y0, d.y1)], text });
+  const t = video.currentTime, c = [[d.x0, d.y0], [d.x1, d.y1], [d.x1, d.y0], [d.x0, d.y1]].map(([x, y]) => toPitch(t, x, y));
+  if (c.every(Boolean)) await annAddZone(annPitchBox(c.map(q => q[0]), c.map(q => q[1])));
+  else await annAddZone([Math.min(d.x0, d.x1), Math.min(d.y0, d.y1), Math.max(d.x0, d.x1), Math.max(d.y0, d.y1)], true);
 });
 function annFinishChain() {
   if (Ann.tool !== 'chain') return;
@@ -451,21 +667,36 @@ function annFinishChain() {
   annAdd({ type: 'chain', tracks, fill: tracks.length >= 3 && confirm('Shade the area between these ' + tracks.length + ' players?\n\nOK = line with shaded area\nCancel = just the line') });
   $('#annHint').textContent = ANN_TYPES.chain.hint;
 }
+// step through the annotations like slides (for a team talk): jump to the next / previous one, paused, selected
+function annStep(dir) {
+  const list = (TR.anns || []).slice().sort((a, b) => a.t0 - b.t0); if (!list.length) { toast('No annotations yet', 'info'); return; }
+  const cur = Ann.sel ? list.findIndex(a => a.id === Ann.sel) : -1, now = video.currentTime;
+  let k;
+  if (cur >= 0) k = cur + dir;                                   // from the selected one to its neighbour
+  else if (dir > 0) k = list.findIndex(a => a.t0 >= now - 0.05);  // from the current moment
+  else { k = -1; list.forEach((a, i) => { if (a.t0 < now - 0.05) k = i; }); }
+  if (k < 0 || k >= list.length) { toast(dir > 0 ? 'That was the last annotation' : 'That was the first annotation', 'info', 1500); return; }
+  const next = list[k];
+  video.pause(); video.currentTime = Math.min(next.t1, next.t0 + 0.6); annSelect(next.id);
+  toast(`${ANN_TYPES[next.type].icon} ${k + 1} / ${list.length}: ${annName(next)}`, 'info', 1800);
+}
 function annListPop() {
   const pop = $('#annPop');
   if (!pop.classList.contains('hidden')) { pop.classList.add('hidden'); return; }
   const list = (TR.anns || []).slice().sort((a, b) => a.t0 - b.t0);
-  pop.innerHTML = list.length ? list.map(a => `<div class="arow"><span class="chip" style="background:${esc(a.color)}"></span><span>${ANN_TYPES[a.type].icon}</span>
+  pop.innerHTML = list.length ? list.map(a => `<div class="arow ${a.id === Ann.sel ? 'on' : ''}"><span class="chip" style="background:${esc(a.color)}"></span><span>${ANN_TYPES[a.type].icon}</span>
       <span class="grow" title="${esc(annName(a))}">${esc(annName(a))}</span><span class="muted">${fmtTime(a.t0)}–${fmtTime(a.t1)}</span>
-      <button class="small" data-ajump="${a.id}" title="Go there">▶</button><button class="small" data-alen="${a.id}" title="Longer (+1 s)">+</button><button class="small" data-ashort="${a.id}" title="Shorter (−1 s)">−</button><button class="small danger" data-adel="${a.id}" title="Delete">✕</button></div>`).join('')
+      <button class="small" data-ajump="${a.id}" title="Go there and select it">▶</button><button class="small" data-alen="${a.id}" title="Longer (+1 s)">+</button><button class="small" data-ashort="${a.id}" title="Shorter (−1 s)">−</button><button class="small danger" data-adel="${a.id}" title="Delete">✕</button></div>`).join('')
     : '<p class="small muted" style="margin:4px">No annotations yet.</p>';
+  const br = $('#annBar').getBoundingClientRect();
+  pop.style.left = Math.round(br.right + 8) + 'px'; pop.style.top = Math.round(Math.max(8, Math.min(br.top, window.innerHeight - 320))) + 'px';
   pop.classList.remove('hidden');
   const find = id => (TR.anns || []).find(a => a.id === id);
-  pop.querySelectorAll('[data-ajump]').forEach(b => b.onclick = () => { const a = find(b.dataset.ajump); if (a) { video.pause(); video.currentTime = Math.min(a.t1, a.t0 + 0.6); } });
-  const len = (id, d) => { const a = find(id); if (!a) return; checkpoint(); a.t1 = Math.max(a.t0 + 0.5, Math.round((a.t1 + d) * 1000) / 1000); markDirty(); autosave(); pop.classList.add('hidden'); annListPop(); paintAnnotations(); };
+  pop.querySelectorAll('[data-ajump]').forEach(b => b.onclick = () => { const a = find(b.dataset.ajump); if (a) { video.pause(); video.currentTime = Math.min(a.t1, a.t0 + 0.6); annSelect(a.id); } });
+  const len = (id, d) => { const a = find(id); if (!a) return; checkpoint(); a.t1 = Math.max(a.t0 + 0.5, Math.round((a.t1 + d) * 1000) / 1000); annChanged(); pop.classList.add('hidden'); annListPop(); };
   pop.querySelectorAll('[data-alen]').forEach(b => b.onclick = () => len(b.dataset.alen, 1));
   pop.querySelectorAll('[data-ashort]').forEach(b => b.onclick = () => len(b.dataset.ashort, -1));
-  pop.querySelectorAll('[data-adel]').forEach(b => b.onclick = () => { checkpoint(); TR.anns = TR.anns.filter(a => a.id !== b.dataset.adel); markDirty(); autosave(); annCount(); pop.classList.add('hidden'); annListPop(); paintAnnotations(); render2D(true); if (typeof V3 !== 'undefined') V3.dirty = true; });
+  pop.querySelectorAll('[data-adel]').forEach(b => b.onclick = () => { annDelete(b.dataset.adel); pop.classList.add('hidden'); annListPop(); });
 }
 
 /* ---------------------------------------------------------------- MP4 with the annotations burnt in */
@@ -522,20 +753,35 @@ async function annRender(t0, t1, opt) {
   return res;
 }
 
+/* ---------------------------------------------------------------- the palette can be moved by its title */
+(function annPaletteDrag() {
+  const bar = $('#annBar'), title = bar.querySelector('.atitle'); let d = null;
+  const place = (x, y) => { const wrap = $('#videoWrap').getBoundingClientRect(), r = bar.getBoundingClientRect(); x = clamp(x, 0, wrap.width - r.width); y = clamp(y, 0, wrap.height - r.height); bar.style.left = x + 'px'; bar.style.top = y + 'px'; bar.style.transform = 'none'; return [x, y]; };
+  try { const p = JSON.parse(localStorage.getItem('tq_annbar') || 'null'); if (p) requestAnimationFrame(() => place(p[0], p[1])); } catch (e) { /* default place */ }
+  title.title = 'Drag to move the palette (double-click: back to the left side)';
+  title.addEventListener('mousedown', e => { const r = bar.getBoundingClientRect(), wrap = $('#videoWrap').getBoundingClientRect(); d = { dx: e.clientX - r.left, dy: e.clientY - r.top, wl: wrap.left, wt: wrap.top }; e.preventDefault(); });
+  window.addEventListener('mousemove', e => { if (d) place(e.clientX - d.wl - d.dx, e.clientY - d.wt - d.dy); });
+  window.addEventListener('mouseup', () => { if (!d) return; d = null; try { localStorage.setItem('tq_annbar', JSON.stringify([parseFloat(bar.style.left), parseFloat(bar.style.top)])); } catch (e) { /* ignore */ } });
+  title.addEventListener('dblclick', () => { bar.style.left = ''; bar.style.top = ''; bar.style.transform = ''; try { localStorage.removeItem('tq_annbar'); } catch (e) { /* ignore */ } });
+})();
+
 /* ---------------------------------------------------------------- wiring */
 $('#btnAnn').onclick = () => Ann.on ? annClose() : annOpen();
 $('#annClose').onclick = annClose;
 $('#annDone').onclick = annFinishChain;
 $('#annList').onclick = annListPop;
 $('#annExport').onclick = annExport;
+$('#annPrev').onclick = () => annStep(-1);
+$('#annNext').onclick = () => annStep(1);
 $$('#annBar [data-ann]').forEach(b => b.onclick = () => annSetTool(b.dataset.ann));
-$$('#annBar [data-acolor]').forEach(b => b.onclick = () => { Ann.color = b.dataset.acolor; $$('#annBar [data-acolor]').forEach(x => x.classList.toggle('on', x === b)); paintAnnotations(); });
+$$('#annBar [data-acolor]').forEach(b => b.onclick = () => annSetColour(b.dataset.acolor));
 HOOKS.tick.push(() => { if (Ann.on || (TR.anns || []).length) paintAnnotations(); });
-HOOKS.render.push(tab => { if (!tab || tab === 'resize') { annCount(); paintAnnotations(); } });
+HOOKS.render.push(tab => { if (!tab || tab === 'resize') { annCount(); if (Ann.sel && !annById(Ann.sel)) Ann.sel = null; annSelBar(); paintAnnotations(); } });
 HOOKS.key.push(e => {
   if (!Ann.on || e.ctrlKey || e.altKey || e.metaKey) return false;
   if (e.key === 'Enter' && Ann.tool === 'chain') { e.preventDefault(); annFinishChain(); return true; }
-  if (e.key === 'Escape') { if (Ann.tool) annSetTool(null); else annClose(); return true; }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && Ann.sel && !Ann.tool && !TR.on) { e.preventDefault(); annDelete(Ann.sel); return true; }
+  if (e.key === 'Escape') { if (Ann.tool) annSetTool(null); else if (Ann.sel) annSelect(null); else annClose(); return true; }
   return false;
 });
 video.addEventListener('pause', annKick);
